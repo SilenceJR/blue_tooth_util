@@ -1,7 +1,9 @@
+import '../common/result.dart';
 import '../core/ble_protocol_adapter.dart';
 import '../core/ble_scan_device.dart';
 import '../core/ble_transport.dart';
 import 'ring_ble_session.dart';
+import 'ring_models.dart';
 import 'ring_protocol.dart';
 
 /// 智能戒指协议适配器。
@@ -24,7 +26,20 @@ class RingProtocolAdapter implements BleProtocolAdapter<RingBleSession> {
     final advertisesService = device.services
         .map((service) => service.toLowerCase())
         .contains(RingProtocol.serviceUuid);
-    return name.startsWith(RingProtocol.deviceName) || advertisesService;
+    final hasRingManufacturerData = RingAdvertisement.fromScanDevice(
+      device,
+    ).isSuccess;
+    return name.startsWith(RingProtocol.deviceName) ||
+        advertisesService ||
+        hasRingManufacturerData;
+  }
+
+  /// 解析扫描结果中的智能戒指厂商数据。
+  ///
+  /// [device] 为扫描结果；成功时返回 MAC、固件版本、客户 id、机器 id、
+  /// 绑定能力和绑定状态等结构化字段。
+  Result<RingAdvertisement> parseAdvertisement(BleScanDevice device) {
+    return RingAdvertisement.fromScanDevice(device);
   }
 
   @override

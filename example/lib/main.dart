@@ -294,6 +294,8 @@ class BleDebugController extends GetxController with WidgetsBindingObserver {
   final buttonCount = Rxn<RingButtonCount>();
   final zikrDay = Rxn<RingZikrDay>();
   final screenOffTime = Rxn<RingScreenOffTime>();
+  final screenDirection = Rxn<RingScreenDirection>();
+  final prayerReminders = <RingPrayerReminder>[].obs;
   final actionState = Rxn<RingActionState>();
 
   final _subscriptions = <StreamSubscription>[];
@@ -465,6 +467,8 @@ class BleDebugController extends GetxController with WidgetsBindingObserver {
     finding.value = false;
     realtimeSportEnabled.value = false;
     actionState.value = null;
+    screenDirection.value = null;
+    prayerReminders.clear();
   }
 
   Future<void> queryDeviceInfo() async {
@@ -486,6 +490,16 @@ class BleDebugController extends GetxController with WidgetsBindingObserver {
       battery.value = value;
     }
     _show(result, 'Battery loaded');
+  }
+
+  Future<void> queryButtonCount() async {
+    final current = session.value;
+    if (current == null) return;
+    final result = await current.queryButtonCount();
+    if (result case Success<RingButtonCount>(:final value)) {
+      buttonCount.value = value;
+    }
+    _show(result, 'Button count loaded');
   }
 
   Future<void> syncTime() async {
@@ -516,8 +530,21 @@ class BleDebugController extends GetxController with WidgetsBindingObserver {
     if (current == null || flipping.value) return;
     flipping.value = true;
     final result = await current.flipScreen();
+    if (result case Success<RingScreenDirection>(:final value)) {
+      screenDirection.value = value;
+    }
     flipping.value = false;
     _show(result, 'Screen flip done');
+  }
+
+  Future<void> queryScreenDirection() async {
+    final current = session.value;
+    if (current == null) return;
+    final result = await current.queryScreenDirection();
+    if (result case Success<RingScreenDirection>(:final value)) {
+      screenDirection.value = value;
+    }
+    _show(result, 'Screen direction loaded');
   }
 
   Future<void> startFindRing() async {
@@ -539,6 +566,34 @@ class BleDebugController extends GetxController with WidgetsBindingObserver {
       selectedScreenOffSeconds.value,
     );
     _show(result, 'Screen off time set');
+  }
+
+  Future<void> queryPrayerReminders() async {
+    final current = session.value;
+    if (current == null) return;
+    final result = await current.queryPrayerReminders();
+    if (result case Success<List<RingPrayerReminder>>(:final value)) {
+      prayerReminders.assignAll(value);
+    }
+    _show(result, 'Prayer reminders loaded');
+  }
+
+  Future<void> writeSamplePrayerReminder() async {
+    final current = session.value;
+    if (current == null) return;
+    final sample = [
+      const RingPrayerReminder(
+        enabled: true,
+        hour: 8,
+        minute: 30,
+        weekdaysMask: 0x7F,
+      ),
+    ];
+    final result = await current.setPrayerReminders(sample);
+    if (result.isSuccess) {
+      prayerReminders.assignAll(sample);
+    }
+    _show(result, 'Sample prayer reminder written');
   }
 
   Future<void> softDisconnect() async {
@@ -636,6 +691,16 @@ class BleDebugController extends GetxController with WidgetsBindingObserver {
       }),
     );
     _sessionSubscriptions.add(
+      current.screenDirectionStream.listen((value) {
+        screenDirection.value = value;
+      }),
+    );
+    _sessionSubscriptions.add(
+      current.prayerRemindersStream.listen((value) {
+        prayerReminders.assignAll(value);
+      }),
+    );
+    _sessionSubscriptions.add(
       current.actionStateStream.listen(_handleActionState),
     );
     _sessionSubscriptions.add(
@@ -669,8 +734,11 @@ class BleDebugController extends GetxController with WidgetsBindingObserver {
         ? ''
         : ' status 0x${state.status!.toRadixString(16).padLeft(2, '0')}';
     final detail = state.failure?.message ?? state.message;
+    final direction = state.screenDirection == null
+        ? ''
+        : ' ${state.screenDirection!.label}';
     return '${state.command.label} ${state.phase.name}$status'
-        '${detail == null ? '' : ': $detail'}';
+        '$direction${detail == null ? '' : ': $detail'}';
   }
 
   void _show<T>(Result<T>? result, String successMessage) {
@@ -964,27 +1032,43 @@ class _ScanPanel extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               for (final device in controller.devices)
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.bluetooth_connected),
-                  title: Text(
-                    device.name?.isNotEmpty == true
-                        ? device.name!
-                        : device.deviceId,
-                  ),
-                  subtitle: Text(
-                    'RSSI ${device.rssi ?? '-'}  ${device.deviceId}',
-                  ),
-                  trailing: FilledButton(
-                    onPressed: controller.connecting.value
-                        ? null
-                        : () => controller.connect(device),
-                    child: const Text('Connect'),
-                  ),
-                ),
+                _ScanDeviceTile(controller: controller, device: device),
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _ScanDeviceTile extends StatelessWidget {
+  const _ScanDeviceTile({required this.controller, required this.device});
+
+  final BleDebugController controller;
+  final BleScanDevice device;
+
+  @override
+  Widget build(BuildContext context) {
+    final advertisement = device.parseRingAdvertisement().valueOrNull;
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: const Icon(Icons.bluetooth_connected),
+      title: Text(
+        device.name?.isNotEmpty == true ? device.name! : device.deviceId,
+      ),
+      subtitle: Text(
+        [
+          'RSSI ${device.rssi ?? '-'}  ${device.deviceId}',
+          if (advertisement != null)
+            'ADV mac ${advertisement.macAddressText} fw ${advertisement.firmwareVersion} bound ${advertisement.isBound}',
+        ].join('\n'),
+      ),
+      isThreeLine: advertisement != null,
+      trailing: FilledButton(
+        onPressed: controller.connecting.value
+            ? null
+            : () => controller.connect(device),
+        child: const Text('Connect'),
       ),
     );
   }
@@ -1002,6 +1086,8 @@ class _DevicePanel extends StatelessWidget {
       final battery = controller.battery.value;
       final sport = controller.sport.value;
       final zikr = controller.zikrDay.value;
+      final reminders = controller.prayerReminders;
+      final advertisement = controller.session.value?.advertisement;
       return Card(
         child: Padding(
           padding: const EdgeInsets.all(12),
@@ -1019,6 +1105,15 @@ class _DevicePanel extends StatelessWidget {
               ),
               _kv('Firmware', info?.firmwareVersion.toString() ?? '-'),
               _kv('Protocol', info?.protocolVersion ?? '-'),
+              _kv('ADV MAC', advertisement?.macAddressText ?? '-'),
+              _kv(
+                'ADV Firmware',
+                advertisement?.firmwareVersion.toString() ?? '-',
+              ),
+              _kv(
+                'Bound',
+                advertisement == null ? '-' : advertisement.isBound.toString(),
+              ),
               _kv(
                 'Battery',
                 battery == null
@@ -1037,6 +1132,18 @@ class _DevicePanel extends StatelessWidget {
               _kv(
                 'Screen off',
                 controller.screenOffTime.value?.seconds.toString() ?? '-',
+              ),
+              _kv('Direction', controller.screenDirection.value?.label ?? '-'),
+              _kv(
+                'Reminders',
+                reminders.isEmpty
+                    ? '-'
+                    : reminders
+                          .map(
+                            (item) =>
+                                '${item.enabled ? 'on' : 'off'} ${item.timeText} ${item.everyDay ? 'daily' : 'mask ${item.weekdaysMask}'}',
+                          )
+                          .join('\n'),
               ),
               _kv(
                 'Zikr day',
@@ -1088,6 +1195,12 @@ class _CommandPanel extends StatelessWidget {
                     controller.queryBattery,
                   ),
                   _button(
+                    Icons.pin,
+                    'Count',
+                    enabled,
+                    controller.queryButtonCount,
+                  ),
+                  _button(
                     Icons.sync,
                     'Sync time',
                     enabled,
@@ -1114,6 +1227,12 @@ class _CommandPanel extends StatelessWidget {
                     controller.flipScreen,
                   ),
                   _button(
+                    Icons.screen_rotation_alt,
+                    'Direction',
+                    enabled,
+                    controller.queryScreenDirection,
+                  ),
+                  _button(
                     Icons.vibration,
                     controller.finding.value ? 'Finding' : 'Find',
                     enabled && !controller.finding.value,
@@ -1130,6 +1249,18 @@ class _CommandPanel extends StatelessWidget {
                     'Soft disconnect',
                     enabled,
                     controller.softDisconnect,
+                  ),
+                  _button(
+                    Icons.alarm,
+                    'Read reminders',
+                    enabled,
+                    controller.queryPrayerReminders,
+                  ),
+                  _button(
+                    Icons.alarm_add,
+                    'Write sample',
+                    enabled,
+                    controller.writeSamplePrayerReminder,
                   ),
                   _button(
                     Icons.bluetooth_disabled,

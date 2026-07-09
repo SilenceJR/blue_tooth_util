@@ -14,6 +14,9 @@ enum RingCommand {
   /// 查询电量。
   battery(0x0102, 'Battery'),
 
+  /// 主动查询当前按键计数。
+  buttonCountQuery(0x0103, 'Button count query'),
+
   /// 开关实时运动上报。
   sportRealtimeSwitch(0x0108, 'Realtime sport switch'),
 
@@ -22,6 +25,15 @@ enum RingCommand {
 
   /// 屏幕方向翻转。
   screenFlip(0x010A, 'Screen flip'),
+
+  /// 查询或接收当前屏幕方向。
+  screenDirection(0x010E, 'Screen direction'),
+
+  /// 设置诵经提醒表。
+  prayerReminderSet(0x010F, 'Prayer reminder set'),
+
+  /// 查询诵经提醒表。
+  prayerReminderQuery(0x0110, 'Prayer reminder query'),
 
   /// 寻找戒指。
   findRing(0x010B, 'Find ring'),
@@ -66,6 +78,11 @@ enum RingCommand {
     }
     return null;
   }
+
+  Map<String,dynamic> toJson() => {
+    'value': value,
+    'label': label,
+  };
 }
 
 /// 设备错误帧中的错误码。
@@ -104,6 +121,11 @@ enum RingDeviceError {
     }
     return null;
   }
+
+  Map<String,dynamic> toJson() => {
+    'code': code,
+    'message': message,
+  };
 }
 
 /// 智能戒指 GATT 与连接参数常量。
@@ -121,6 +143,9 @@ class RingProtocol {
 
   /// 默认广播名称。
   static const deviceName = 'BS Ring 2';
+
+  /// 广播厂商数据中的灰鲨标识，字节为 `59 4A`。
+  static const manufacturerIdentifier = 0x4A59;
 
   /// 连接后建议请求的 MTU。
   static const requestedMtu = 247;

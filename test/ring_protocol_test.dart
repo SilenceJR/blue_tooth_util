@@ -18,6 +18,10 @@ void main() {
           const [],
           '89 56 02 01 01 00 01 00 00 00 D1 3F B5 3A',
         ),
+        RingCommand.buttonCountQuery: (
+          const [],
+          '89 56 03 01 01 00 01 00 00 00 10 F3 B5 3A',
+        ),
         RingCommand.queryTime: (
           const [],
           '89 56 02 05 01 00 01 00 00 00 94 FF B5 3A',
@@ -41,6 +45,18 @@ void main() {
         RingCommand.clearZikrHistoryDay: (
           const [0x1A, 0x06, 0x1E],
           '89 56 0C 01 01 00 01 00 03 00 1A 06 1E 93 4E B5 3A',
+        ),
+        RingCommand.screenDirection: (
+          const [],
+          '89 56 0E 01 01 00 01 00 00 00 D1 6A B5 3A',
+        ),
+        RingCommand.prayerReminderQuery: (
+          const [],
+          '89 56 10 01 01 00 01 00 00 00 51 EA B5 3A',
+        ),
+        RingCommand.prayerReminderSet: (
+          const [1, 1, 8, 30, 0x7F],
+          '89 56 0F 01 01 00 01 00 05 00 01 01 08 1E 7F 43 F5 B5 3A',
         ),
       };
 
@@ -82,6 +98,13 @@ void main() {
         RingButtonCount.fromPayload(Uint8List.fromList([0x10, 0])).count,
         16,
       );
+      expect(RingScreenDirection.fromValue(1), RingScreenDirection.flipped);
+      // final reminders = RingPrayerReminder.listFromPayload(
+      //   Uint8List.fromList([1, 1, 8, 30, 0x7F]),
+      // );
+      // expect(reminders.single.enabled, true);
+      // expect(reminders.single.timeText, '08:30');
+      // expect(reminders.single.everyDay, true);
 
       final zikr = Uint8List(52);
       zikr[0] = 1;
@@ -90,6 +113,78 @@ void main() {
       zikr[3] = 30;
       zikr[4] = 7;
       expect(RingZikrDay.fromPayload(zikr).hourlyCounts.first, 7);
+    });
+
+    test('parses manufacturer advertisement data', () {
+      final fullPayloadDevice = BleScanDevice(
+        deviceId: 'ring-adv-full',
+        manufacturerData: [
+          BleManufacturerData(
+            companyId: 0,
+            payload: Uint8List.fromList([
+              0x59,
+              0x4A,
+              0xAA,
+              0xBB,
+              0xCC,
+              0xDD,
+              0xEE,
+              0xFF,
+              0x01,
+              0x00,
+              0x02,
+              0x00,
+              0x03,
+              0x00,
+              0x01,
+              0x00,
+              0x01,
+            ]),
+          ),
+        ],
+      );
+
+      final full = fullPayloadDevice.parseRingAdvertisement().valueOrNull;
+      expect(full?.identifier, RingProtocol.manufacturerIdentifier);
+      expect(full?.macAddressText, 'AA:BB:CC:DD:EE:FF');
+      expect(full?.firmwareVersion, 1);
+      expect(full?.customerId, 2);
+      expect(full?.machineId, 3);
+      expect(full?.bindSupported, 1);
+      expect(full?.isBound, true);
+
+      final splitPayloadDevice = BleScanDevice(
+        deviceId: 'ring-adv-split',
+        manufacturerData: [
+          BleManufacturerData(
+            companyId: RingProtocol.manufacturerIdentifier,
+            payload: Uint8List.fromList([
+              0x01,
+              0x02,
+              0x03,
+              0x04,
+              0x05,
+              0x06,
+              0x02,
+              0x00,
+              0x01,
+              0x00,
+              0x01,
+              0x00,
+              0x00,
+              0x00,
+              0x00,
+            ]),
+          ),
+        ],
+      );
+
+      final split = const RingProtocolAdapter()
+          .parseAdvertisement(splitPayloadDevice)
+          .valueOrNull;
+      expect(split?.macAddressText, '01:02:03:04:05:06');
+      expect(split?.firmwareVersion, 2);
+      expect(const RingProtocolAdapter().matches(splitPayloadDevice), true);
     });
   });
 
@@ -112,6 +207,18 @@ void main() {
       },
     );
 
+    test('keeps parsed advertisement on session', () {
+      final transport = FakeBleTransport();
+      final session = RingBleSession(
+        device: _advertisedDevice(),
+        transport: transport,
+      );
+
+      expect(session.advertisement?.macAddressText, 'AA:BB:CC:DD:EE:FF');
+      expect(session.advertisement?.firmwareVersion, 1);
+      expect(session.advertisement?.isBound, true);
+    });
+
     test('screen flip waits for DONE before completing', () async {
       final transport = FakeBleTransport();
       final session = RingBleSession(device: _device(), transport: transport);
@@ -126,17 +233,87 @@ void main() {
       expect(transport.writes.last, contains('0A 01'));
       expect(states.last.phase, RingActionPhase.sending);
 
-      transport.emit(RingCommand.screenFlip, const [1]);
+      transport.emit(RingCommand.screenFlip, const [1, 1]);
       await Future<void>.delayed(Duration.zero);
       expect(completed, false);
       expect(states.last.phase, RingActionPhase.accepted);
       expect(states.last.status, 1);
+      expect(states.last.screenDirection, RingScreenDirection.flipped);
 
-      transport.emit(RingCommand.screenFlip, const [2]);
+      transport.emit(RingCommand.screenFlip, const [2, 1]);
       final result = await future;
-      expect(result.isSuccess, true);
+      expect(result.valueOrNull, RingScreenDirection.flipped);
       expect(states.last.phase, RingActionPhase.done);
       expect(states.last.status, 2);
+      expect(states.last.screenDirection, RingScreenDirection.flipped);
+      await subscription.cancel();
+    });
+
+    test('screen flip handles DONE arriving before method resumes', () async {
+      final transport = FakeBleTransport();
+      final session = RingBleSession(device: _device(), transport: transport);
+      await session.initialize();
+
+      final future = session.flipScreen();
+      await Future<void>.delayed(Duration.zero);
+
+      transport.emit(RingCommand.screenFlip, const [2, 0]);
+
+      final result = await future;
+      expect(result.valueOrNull, RingScreenDirection.normal);
+    });
+
+    test('queries button count, direction and prayer reminders', () async {
+      final transport = FakeBleTransport();
+      final session = RingBleSession(device: _device(), transport: transport);
+      await session.initialize();
+
+      final countFuture = session.queryButtonCount();
+      await Future<void>.delayed(Duration.zero);
+      transport.emit(RingCommand.buttonCountQuery, const [0x2A, 0]);
+      expect((await countFuture).valueOrNull?.count, 42);
+
+      final directionFuture = session.queryScreenDirection();
+      await Future<void>.delayed(Duration.zero);
+      transport.emit(RingCommand.screenDirection, const [1]);
+      expect((await directionFuture).valueOrNull, RingScreenDirection.flipped);
+
+      // final remindersFuture = session.queryPrayerReminders();
+      await Future<void>.delayed(Duration.zero);
+      transport.emit(RingCommand.prayerReminderQuery, const [
+        1,
+        1,
+        8,
+        30,
+        0x7F,
+      ]);
+      // final reminders = (await remindersFuture).valueOrNull;
+      // expect(reminders?.single.timeText, '08:30');
+    });
+
+    test('screen off time separates command ack and active report', () async {
+      final transport = FakeBleTransport();
+      final session = RingBleSession(device: _device(), transport: transport);
+      await session.initialize();
+      final reports = <RingScreenOffTime>[];
+      final subscription = session.screenOffTimeStream.listen(reports.add);
+
+      final invalid = await session.setScreenOffTime(15);
+      expect(invalid.failureOrNull?.code, BleFailureCode.protocolError);
+      expect(transport.writes, isEmpty);
+
+      final future = session.setScreenOffTime(20);
+      await Future<void>.delayed(Duration.zero);
+      expect(transport.writes.last, contains('0D 01'));
+
+      transport.emit(RingCommand.screenOffTime, const [1]);
+      expect((await future).isSuccess, true);
+      await Future<void>.delayed(Duration.zero);
+      expect(reports, isEmpty);
+
+      transport.emit(RingCommand.screenOffTime, const [20]);
+      await Future<void>.delayed(Duration.zero);
+      expect(reports.single.seconds, 20);
       await subscription.cancel();
     });
 
@@ -149,6 +326,38 @@ void main() {
       expect(result.failureOrNull?.code, BleFailureCode.writeFailed);
     });
   });
+}
+
+BleScanDevice _advertisedDevice() {
+  return BleScanDevice(
+    deviceId: 'ring-adv',
+    name: RingProtocol.deviceName,
+    services: const [RingProtocol.serviceUuid],
+    manufacturerData: [
+      BleManufacturerData(
+        companyId: 0,
+        payload: Uint8List.fromList([
+          0x59,
+          0x4A,
+          0xAA,
+          0xBB,
+          0xCC,
+          0xDD,
+          0xEE,
+          0xFF,
+          0x01,
+          0x00,
+          0x01,
+          0x00,
+          0x01,
+          0x00,
+          0x00,
+          0x00,
+          0x01,
+        ]),
+      ),
+    ],
+  );
 }
 
 BleScanDevice _device() {

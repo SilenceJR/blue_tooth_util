@@ -1,7 +1,10 @@
+import 'dart:math';
 import 'dart:typed_data';
 
 import '../common/ble_failure.dart';
 import '../common/hex_utils.dart';
+import '../common/result.dart';
+import '../core/ble_scan_device.dart';
 import 'ring_protocol.dart';
 
 /// 两段式命令的执行阶段。
@@ -34,6 +37,7 @@ class RingActionState {
     required this.command,
     required this.phase,
     this.status,
+    this.screenDirection,
     this.failure,
     this.message,
   });
@@ -47,11 +51,42 @@ class RingActionState {
   /// 设备返回的原始状态字节，发送中或本地失败时为空。
   final int? status;
 
+  /// 屏幕翻转两段应答携带的当前方向，非屏幕方向相关命令时为空。
+  final RingScreenDirection? screenDirection;
+
   /// 失败详情，仅 [RingActionPhase.failed] 阶段有值。
   final BleFailure? failure;
 
   /// 调试说明，用于 example 展示状态变化原因。
   final String? message;
+}
+
+/// 屏幕方向。
+enum RingScreenDirection {
+  /// 正常方向。
+  normal(0, 'Normal'),
+
+  /// 翻转 180°。
+  flipped(1, 'Flipped');
+
+  /// [value] 为协议字节；[label] 为调试展示文案。
+  const RingScreenDirection(this.value, this.label);
+
+  /// 协议中的 1 字节方向值。
+  final int value;
+
+  /// 调试展示文案。
+  final String label;
+
+  /// 从协议字节解析屏幕方向。
+  ///
+  /// [value] 只能是 0 或 1，否则抛出 [FormatException]。
+  static RingScreenDirection fromValue(int value) {
+    for (final direction in values) {
+      if (direction.value == value) return direction;
+    }
+    throw FormatException('Invalid screen direction: $value');
+  }
 }
 
 /// 收发帧日志。
@@ -93,6 +128,175 @@ class RingFrameLog {
 
   /// UI 日志标题，优先显示命令名称，未知命令显示十六进制命令字。
   String get title => command?.label ?? '0x${commandValue.toRadixString(16)}';
+
+  Map<String, dynamic> toJson() {
+    return {
+      'direction': direction,
+      'timestamp': timestamp.toIso8601String(),
+      'command': command?.toJson(),
+      'commandValue': commandValue,
+      'hex': hex,
+      'description': description,
+      'error': error?.toJson(),
+    };
+  }
+}
+
+/// 智能戒指广播厂商数据。
+class RingAdvertisement {
+  /// 创建结构化广播厂商数据。
+  ///
+  /// [companyId] 是底层平台解析出的 Company Identifier；
+  /// [identifier] 是协议中的灰鲨标识，当前为 `0x4A59`；
+  /// [macAddress] 是广播中的 6 字节设备 MAC，MSB-first；
+  /// [firmwareVersion] 是 16-bit 固件版本；[customerId]、[machineId] 当前为占位；
+  /// [bindSupported] 是支持绑定原始字段；[bindState] 是绑定状态字节。
+  const RingAdvertisement({
+    required this.companyId,
+    required this.identifier,
+    required this.macAddress,
+    required this.firmwareVersion,
+    required this.customerId,
+    required this.machineId,
+    required this.bindSupported,
+    required this.bindState,
+    required this.rawPayload,
+  });
+
+  /// 底层平台解析出的 Company Identifier；部分平台可能为协议标识 `0x4A59`。
+  final int companyId;
+
+  /// 协议标识，小端字节 `59 4A`，数值为 `0x4A59`。
+  final int identifier;
+
+  /// 设备 MAC，6 字节，MSB-first，与屏显/设备信息一致。
+  final Uint8List macAddress;
+
+  /// 固件版本，小端 16-bit 整数。
+  final int firmwareVersion;
+
+  /// 客户 id，小端 16-bit 整数，当前固件通常为占位 `0x0001`。
+  final int customerId;
+
+  /// 机器 id，小端 16-bit 整数，当前固件通常为占位 `0x0001`。
+  final int machineId;
+
+  /// 支持绑定原始字段，小端 16-bit 整数。
+  final int bindSupported;
+
+  /// 绑定状态原始字节。
+  final int bindState;
+
+  /// 原始厂商自定义载荷，便于日志和兼容新版本字段。
+  final Uint8List rawPayload;
+
+  /// MAC 十六进制字符串，默认以 `:` 分隔，适合调试 UI 展示。
+  String get macAddressText => bytesToHex(macAddress, separator: ':');
+
+  /// 是否已绑定。
+  bool get isBound => bindState != 0;
+
+  /// 从扫描结果解析智能戒指厂商数据。
+  ///
+  /// [device] 为 SDK 扫描结果；若没有符合 `0x4A59` 结构的厂商数据返回失败。
+  static Result<RingAdvertisement> fromScanDevice(BleScanDevice device) {
+    for (final data in device.manufacturerData) {
+      final result = fromManufacturerData(data);
+      if (result case Success<RingAdvertisement>()) {
+        return result;
+      }
+    }
+    return const Result.failure(
+      BleFailure(
+        code: BleFailureCode.protocolError,
+        message: 'Ring manufacturer data was not found',
+      ),
+    );
+  }
+
+  /// 从单条 BLE 厂商数据解析智能戒指广播字段。
+  ///
+  /// Android/iOS/Web 对厂商数据的拆分可能不同：有的平台会把前 2 字节作为
+  /// [BleManufacturerData.companyId] 并从 [BleManufacturerData.payload] 中移除；
+  /// 有的平台会把 `59 4A` 保留在 payload 开头。这里同时兼容两种格式。
+  static Result<RingAdvertisement> fromManufacturerData(
+    BleManufacturerData data,
+  ) {
+    final payload = data.payload;
+    final Uint8List body;
+    final int identifier;
+    if (payload.length >= 17 && payload[0] == 0x59 && payload[1] == 0x4A) {
+      identifier = ringReadUint16(payload, 0);
+      body = payload.sublist(2);
+    } else if (data.companyId == RingProtocol.manufacturerIdentifier &&
+        payload.length >= 15) {
+      identifier = data.companyId;
+      body = payload;
+    } else {
+      return const Result.failure(
+        BleFailure(
+          code: BleFailureCode.protocolError,
+          message: 'Manufacturer data is not a ring advertisement',
+        ),
+      );
+    }
+
+    if (body.length < 15) {
+      return const Result.failure(
+        BleFailure(
+          code: BleFailureCode.protocolError,
+          message: 'Ring manufacturer payload is too short',
+        ),
+      );
+    }
+
+    return Result.success(
+      RingAdvertisement(
+        companyId: data.companyId,
+        identifier: identifier,
+        macAddress: Uint8List.fromList(body.sublist(0, 6)),
+        firmwareVersion: ringReadUint16(body, 6),
+        customerId: ringReadUint16(body, 8),
+        machineId: ringReadUint16(body, 10),
+        bindSupported: ringReadUint16(body, 12),
+        bindState: body[14],
+        rawPayload: Uint8List.fromList(payload),
+      ),
+    );
+  }
+
+  factory RingAdvertisement.fromJson(Map<String, dynamic> json) =>
+      RingAdvertisement(
+        companyId: json['companyId'] as int,
+        identifier: json['identifier'] as int,
+        macAddress: Uint8List.fromList(json['macAddress'] as List<int>),
+        firmwareVersion: json['firmwareVersion'] as int,
+        customerId: json['customerId'] as int,
+        machineId: json['machineId'] as int,
+        bindSupported: json['bindSupported'] as int,
+        bindState: json['bindState'] as int,
+        rawPayload: Uint8List.fromList(json['rawPayload'] as List<int>),
+      );
+
+  Map<String, dynamic> toJson() => {
+    'companyId': companyId,
+    'identifier': identifier,
+    'macAddress': macAddress.toList(),
+    'firmwareVersion': firmwareVersion,
+    'customerId': customerId,
+    'machineId': machineId,
+    'bindSupported': bindSupported,
+    'bindState': bindState,
+    'rawPayload': rawPayload.toList(),
+  };
+}
+
+/// 智能戒指扫描结果扩展。
+extension RingScanDeviceExtension on BleScanDevice {
+  /// 解析当前扫描结果中的智能戒指厂商数据。
+  Result<RingAdvertisement> parseRingAdvertisement() {
+    return RingAdvertisement.fromScanDevice(this);
+  }
 }
 
 /// 设备信息响应。
@@ -155,7 +359,7 @@ class RingDeviceInfo {
     );
   }
 
-  Map<String,dynamic> toJson() {
+  Map<String, dynamic> toJson() {
     return {
       'manufacturer': manufacturer,
       'model': model,
@@ -260,6 +464,148 @@ class RingButtonCount {
   }
 }
 
+/// 诵经提醒配置项。
+class RingPrayerReminder {
+  /// 创建一条诵经提醒。
+  ///
+  /// [enabled] 表示该提醒是否启用；[hour] 为 0~23；
+  /// [minute] 为 0~59；[weekdaysMask] 为星期重复位图，bit0=周日，
+  /// bit6=周六，`0x7F` 表示每天，`0x00` 表示单次/不重复。
+  const RingPrayerReminder({
+    required this.enabled,
+    required this.start,
+    required this.end,
+    required this.interval,
+  });
+
+  /// 是否启用该提醒。
+  final bool enabled;
+
+  /// 小时，协议范围 0~22。
+  final int start;
+
+  /// 分钟，协议范围 1-23。
+  final int end;
+
+  /// 星期重复位图，bit0=周日，bit6=周六。
+  final int interval;
+
+  /// 格式化时间，用于调试 UI 展示。
+  String get timeText =>
+      '${start.toString().padLeft(2, '0')}:00-${end.toString().padLeft(2, '0')}:00';
+
+  RingPrayerReminder copyWith({
+    bool? enabled,
+    int? start,
+    int? end,
+    int? interval,
+  }) => RingPrayerReminder(
+    enabled: enabled ?? this.enabled,
+    start: start ?? this.start,
+    end: end ?? this.end,
+    interval: interval ?? this.interval,
+  );
+
+  /// 校验提醒字段是否符合协议范围。
+  Result<void> validate() {
+    // if (start < 0 || start > 22 || end < 0 || end > 24) {
+    //   return const Result.failure(
+    //     BleFailure(
+    //       code: BleFailureCode.protocolError,
+    //       message: 'Prayer reminder time is out of range',
+    //     ),
+    //   );
+    // }
+    // if (weekdaysMask < 0 || weekdaysMask > 0x7F) {
+    //   return const Result.failure(
+    //     BleFailure(
+    //       code: BleFailureCode.protocolError,
+    //       message: 'Prayer reminder weekdays mask is out of range',
+    //     ),
+    //   );
+    // }
+    return const Result.success(null);
+  }
+
+  /// 编码为协议中的 4 字节提醒项。
+  // List<int> toPayloadItem() {
+  //   return [enabled ? 1 : 0, hour, minute, weekdaysMask];
+  // }
+
+  /// 从协议 4 字节提醒项解析。
+  ///
+  /// [payload] 是完整提醒表 payload；[offset] 为当前提醒项起始偏移。
+  // factory RingPrayerReminder.fromPayloadItem(Uint8List payload, int offset) {
+  //   if (offset + 4 > payload.length) {
+  //     throw const FormatException('Prayer reminder item is incomplete');
+  //   }
+  //   if (payload[offset] != 0 && payload[offset] != 1) {
+  //     throw const FormatException('Prayer reminder enabled must be 0 or 1');
+  //   }
+  //   final item = RingPrayerReminder(
+  //     enabled: payload[offset] == 1,
+  //     hour: payload[offset + 1],
+  //     minute: payload[offset + 2],
+  //     weekdaysMask: payload[offset + 3],
+  //   );
+  //   final validation = item.validate();
+  //   if (validation case Failure<void>(:final failure)) {
+  //     throw FormatException(failure.message);
+  //   }
+  //   return item;
+  // }
+  //
+  // /// 从完整提醒表 payload 解析提醒列表。
+  // ///
+  // /// 第 0 字节为条数，后续每条 4 字节，最多 8 条。
+  // static List<RingPrayerReminder> listFromPayload(Uint8List payload) {
+  //   if (payload.isEmpty) {
+  //     throw const FormatException('Prayer reminder payload is empty');
+  //   }
+  //   final count = payload[0];
+  //   if (count > 8) {
+  //     throw const FormatException('Prayer reminder count must be <= 8');
+  //   }
+  //   if (payload.length != 1 + count * 4) {
+  //     throw const FormatException('Prayer reminder payload length mismatch');
+  //   }
+  //   return List.generate(
+  //     count,
+  //     (index) => RingPrayerReminder.fromPayloadItem(payload, 1 + index * 4),
+  //   );
+  // }
+  //
+  // /// 将提醒列表编码为完整提醒表 payload。
+  // static Result<Uint8List> listToPayload(List<RingPrayerReminder> reminders) {
+  //   if (reminders.length > 8) {
+  //     return const Result.failure(
+  //       BleFailure(
+  //         code: BleFailureCode.protocolError,
+  //         message: 'Prayer reminder count must be <= 8',
+  //       ),
+  //     );
+  //   }
+  //   final bytes = <int>[reminders.length];
+  //   for (final reminder in reminders) {
+  //     final validation = reminder.validate();
+  //     if (validation case Failure<void>(:final failure)) {
+  //       return Result.failure(failure);
+  //     }
+  //     bytes.addAll(reminder.toPayloadItem());
+  //   }
+  //   return Result.success(Uint8List.fromList(bytes));
+  // }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'enabled': enabled,
+      'start': start,
+      'end': end,
+      'interval': interval,
+    };
+  }
+}
+
 /// 一天的赞念小时桶统计。
 class RingZikrDay {
   /// 创建赞念日统计。
@@ -297,7 +643,7 @@ class RingZikrDay {
     );
   }
 
-  Map<String,dynamic> toJson() {
+  Map<String, dynamic> toJson() {
     return {
       'isToday': isToday,
       'date': date.toIso8601String(),
@@ -314,6 +660,10 @@ class RingScreenOffTime {
 
   /// 息屏秒数，只接受 10/20/30/40/50/60。
   final int seconds;
+
+  Map<String, dynamic> toJson() {
+    return {'seconds': seconds};
+  }
 }
 
 String _ascii(Uint8List payload, int offset, int length) {

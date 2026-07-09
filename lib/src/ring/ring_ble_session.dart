@@ -25,21 +25,32 @@ class RingBleSession implements BleSession {
     required BleTransport transport,
     RingFrameCodec codec = const RingFrameCodec(),
   }) {
-    return RingBleSession._(device, transport, codec);
+    return RingBleSession._(
+      device,
+      transport,
+      codec,
+      RingAdvertisement.fromScanDevice(device).valueOrNull,
+    );
   }
 
-  RingBleSession._(this._device, this._transport, this._codec);
+  RingBleSession._(
+    this._device,
+    this._transport,
+    this._codec,
+    this._advertisement,
+  );
 
   final BleScanDevice _device;
   final BleTransport _transport;
   final RingFrameCodec _codec;
+  final RingAdvertisement? _advertisement;
   final List<StreamSubscription> _subscriptions = [];
   final Queue<_PendingFrame> _pendingFrames = Queue<_PendingFrame>();
 
   bool _initialized = false;
   bool _screenFlipBusy = false;
   bool _findRingBusy = false;
-  Completer<Result<void>>? _screenFlipDone;
+  Completer<Result<RingScreenDirection>>? _screenFlipDone;
   Completer<Result<void>>? _findRingDone;
 
   final _logs = StreamController<RingFrameLog>.broadcast();
@@ -51,6 +62,9 @@ class RingBleSession implements BleSession {
   final _buttonCount = StreamController<RingButtonCount>.broadcast();
   final _zikrDay = StreamController<RingZikrDay>.broadcast();
   final _screenOffTime = StreamController<RingScreenOffTime>.broadcast();
+  final _screenDirection = StreamController<RingScreenDirection>.broadcast();
+  final _prayerReminders =
+      StreamController<List<RingPrayerReminder>>.broadcast();
   final _actionState = StreamController<RingActionState>.broadcast();
 
   @override
@@ -59,6 +73,12 @@ class RingBleSession implements BleSession {
 
   /// 扫描阶段保存的设备信息。
   BleScanDevice get device => _device;
+
+  /// 扫描阶段解析出的戒指厂商数据。
+  ///
+  /// 包含广播 MAC、固件版本、客户 id、机器 id、绑定能力和绑定状态等字段。
+  /// 若该会话来自缓存设备或扫描结果未携带厂商数据，则为空。
+  RingAdvertisement? get advertisement => _advertisement;
 
   /// 收发帧日志流，包含 TX/RX 完整 hex 和命令名。
   Stream<RingFrameLog> get logs => _logs.stream;
@@ -86,6 +106,14 @@ class RingBleSession implements BleSession {
 
   /// 设备主动上报或设置后的息屏时间流。
   Stream<RingScreenOffTime> get screenOffTimeStream => _screenOffTime.stream;
+
+  /// 屏幕方向查询、上电主动上报或翻转应答流。
+  Stream<RingScreenDirection> get screenDirectionStream =>
+      _screenDirection.stream;
+
+  /// 查询到的诵经提醒表流。
+  Stream<List<RingPrayerReminder>> get prayerRemindersStream =>
+      _prayerReminders.stream;
 
   /// 屏幕翻转、寻找戒指等两段式命令状态流。
   Stream<RingActionState> get actionStateStream => _actionState.stream;
@@ -176,6 +204,12 @@ class RingBleSession implements BleSession {
     return _mapPayload(result, RingBattery.fromPayload);
   }
 
+  /// 查询当前按键计数。
+  Future<Result<RingButtonCount>> queryButtonCount() async {
+    final result = await _sendAndWait(RingCommand.buttonCountQuery);
+    return _mapPayload(result, RingButtonCount.fromPayload);
+  }
+
   /// 开关实时运动上报。
   ///
   /// [enabled] 为 true 时开启约 2 秒一次的运动上报，false 时关闭。
@@ -220,7 +254,7 @@ class RingBleSession implements BleSession {
   ///
   /// [flipped] 为 null 时按固件 toggle 当前方向；true 表示翻转 180°；
   /// false 表示恢复正常方向。该命令会等待设备返回 DONE 后才完成。
-  Future<Result<void>> flipScreen({bool? flipped}) async {
+  Future<Result<RingScreenDirection>> flipScreen({bool? flipped}) async {
     if (_screenFlipBusy) {
       final failure = const BleFailure(
         code: BleFailureCode.busy,
@@ -230,7 +264,8 @@ class RingBleSession implements BleSession {
       return Result.failure(failure);
     }
     _screenFlipBusy = true;
-    _screenFlipDone = Completer<Result<void>>();
+    final done = Completer<Result<RingScreenDirection>>();
+    _screenFlipDone = done;
     _emitAction(
       RingCommand.screenFlip,
       RingActionPhase.sending,
@@ -240,15 +275,17 @@ class RingBleSession implements BleSession {
     final accepted = await _sendAndWait(
       RingCommand.screenFlip,
       payload: Uint8List.fromList(payload),
-      predicate: _payloadIs(1),
+      predicate: _payloadStatusIn({1, 2}),
     );
     if (accepted case Failure<RingFrame>(:final failure)) {
       _screenFlipBusy = false;
-      _screenFlipDone = null;
+      if (_screenFlipDone == done) {
+        _screenFlipDone = null;
+      }
       _emitActionFailure(RingCommand.screenFlip, failure);
       return Result.failure(failure);
     }
-    return _screenFlipDone!.future.timeout(
+    return done.future.timeout(
       const Duration(seconds: 5),
       onTimeout: () {
         final failure = const BleFailure(
@@ -256,11 +293,21 @@ class RingBleSession implements BleSession {
           message: 'Screen flip DONE timed out',
         );
         _screenFlipBusy = false;
-        _screenFlipDone = null;
+        if (_screenFlipDone == done) {
+          _screenFlipDone = null;
+        }
         _emitActionFailure(RingCommand.screenFlip, failure);
         return Result.failure(failure);
       },
     );
+  }
+
+  /// 查询当前屏幕方向。
+  ///
+  /// 返回 `0x010E` 的 1 字节方向值，`0` 为正常，`1` 为翻转 180°。
+  Future<Result<RingScreenDirection>> queryScreenDirection() async {
+    final result = await _sendAndWait(RingCommand.screenDirection);
+    return _mapPayload(result, _parseScreenDirectionPayload);
   }
 
   /// 开始寻找戒指。
@@ -277,7 +324,8 @@ class RingBleSession implements BleSession {
       return Result.failure(failure);
     }
     _findRingBusy = true;
-    _findRingDone = Completer<Result<void>>();
+    final done = Completer<Result<void>>();
+    _findRingDone = done;
     _emitAction(
       RingCommand.findRing,
       RingActionPhase.sending,
@@ -286,15 +334,17 @@ class RingBleSession implements BleSession {
     final accepted = await _sendAndWait(
       RingCommand.findRing,
       payload: Uint8List.fromList([1]),
-      predicate: _payloadIs(1),
+      predicate: _payloadStatusIn({1, 2}),
     );
     if (accepted case Failure<RingFrame>(:final failure)) {
       _findRingBusy = false;
-      _findRingDone = null;
+      if (_findRingDone == done) {
+        _findRingDone = null;
+      }
       _emitActionFailure(RingCommand.findRing, failure);
       return Result.failure(failure);
     }
-    return _findRingDone!.future.timeout(
+    return done.future.timeout(
       const Duration(seconds: 15),
       onTimeout: () {
         final failure = const BleFailure(
@@ -302,7 +352,9 @@ class RingBleSession implements BleSession {
           message: 'Find ring DONE timed out',
         );
         _findRingBusy = false;
-        _findRingDone = null;
+        if (_findRingDone == done) {
+          _findRingDone = null;
+        }
         _emitActionFailure(RingCommand.findRing, failure);
         return Result.failure(failure);
       },
@@ -363,6 +415,32 @@ class RingBleSession implements BleSession {
     return _expectStatus(result, 1);
   }
 
+  /// 查询设备保存的诵经提醒表。
+  ///
+  /// 最多返回 8 条提醒；当前固件仅支持读写和持久化，尚未触发到点提醒。
+  // Future<Result<List<RingPrayerReminder>>> queryPrayerReminders() async {
+  //   final result = await _sendAndWait(RingCommand.prayerReminderQuery);
+  //   return _mapPayload(result, RingPrayerReminder.listFromPayload);
+  // }
+
+  /// 覆盖设置设备诵经提醒表。
+  ///
+  /// [reminders] 最多 8 条；每条包含开关、小时、分钟和星期重复位图。
+  // Future<Result<void>> setPrayerReminders(
+  //   List<RingPrayerReminder> reminders,
+  // ) async {
+  //   final payload = RingPrayerReminder.listToPayload(reminders);
+  //   if (payload case Failure<Uint8List>(:final failure)) {
+  //     return Result.failure(failure);
+  //   }
+  //   final result = await _sendAndWait(
+  //     RingCommand.prayerReminderSet,
+  //     payload: (payload as Success<Uint8List>).value,
+  //     predicate: _payloadIs(1),
+  //   );
+  //   return _expectStatus(result, 1);
+  // }
+
   @override
   /// 主动断开当前设备。
   Future<Result<void>> disconnect() {
@@ -392,6 +470,8 @@ class RingBleSession implements BleSession {
     await _buttonCount.close();
     await _zikrDay.close();
     await _screenOffTime.close();
+    await _screenDirection.close();
+    await _prayerReminders.close();
     await _actionState.close();
   }
 
@@ -537,7 +617,7 @@ class RingBleSession implements BleSession {
           }
         case RingCommand.sportRealtimeReport:
           _sport.add(RingRealtimeSport.fromPayload(frame.payload));
-        case RingCommand.buttonCountReport:
+        case RingCommand.buttonCountQuery || RingCommand.buttonCountReport:
           _buttonCount.add(RingButtonCount.fromPayload(frame.payload));
         case RingCommand.zikrHourlyReport:
           _zikrDay.add(RingZikrDay.fromPayload(frame.payload));
@@ -546,13 +626,17 @@ class RingBleSession implements BleSession {
             _screenOffTime.add(RingScreenOffTime(frame.payload[0]));
           }
         case RingCommand.screenFlip:
-          if (frame.payload.length == 1) {
+          if (frame.payload.length >= 2) {
+            final direction = RingScreenDirection.fromValue(frame.payload[1]);
+            _screenDirection.add(direction);
             if (frame.payload[0] == 1) {
               _emitAction(
                 RingCommand.screenFlip,
                 RingActionPhase.accepted,
                 status: 1,
-                message: 'Screen flip accepted, waiting for DONE',
+                screenDirection: direction,
+                message:
+                    'Screen flip accepted, direction is ${direction.label}',
               );
             } else if (frame.payload[0] == 2) {
               _screenFlipBusy = false;
@@ -560,12 +644,23 @@ class RingBleSession implements BleSession {
                 RingCommand.screenFlip,
                 RingActionPhase.done,
                 status: 2,
-                message: 'Screen flip DONE received',
+                screenDirection: direction,
+                message: 'Screen flip DONE, direction is ${direction.label}',
               );
-              _screenFlipDone?.complete(const Result.success(null));
+              _screenFlipDone?.complete(Result.success(direction));
               _screenFlipDone = null;
             }
           }
+        case RingCommand.screenDirection:
+          if (frame.payload.length == 1) {
+            _screenDirection.add(
+              RingScreenDirection.fromValue(frame.payload[0]),
+            );
+          }
+        case RingCommand.prayerReminderQuery:
+          // _prayerReminders.add(
+          //   RingPrayerReminder.listFromPayload(frame.payload),
+          // );
         case RingCommand.findRing:
           if (frame.payload.length == 1) {
             if (frame.payload[0] == 1) {
@@ -591,7 +686,8 @@ class RingBleSession implements BleSession {
             RingCommand.sportRealtimeSwitch ||
             RingCommand.softDisconnect ||
             RingCommand.setTime ||
-            RingCommand.clearZikrHistoryDay:
+            RingCommand.clearZikrHistoryDay ||
+            RingCommand.prayerReminderSet:
         case null:
       }
     } catch (error) {
@@ -609,6 +705,7 @@ class RingBleSession implements BleSession {
     RingCommand command,
     RingActionPhase phase, {
     int? status,
+    RingScreenDirection? screenDirection,
     String? message,
     BleFailure? failure,
   }) {
@@ -617,6 +714,7 @@ class RingBleSession implements BleSession {
         command: command,
         phase: phase,
         status: status,
+        screenDirection: screenDirection,
         message: message,
         failure: failure,
       ),
@@ -727,6 +825,18 @@ class RingBleSession implements BleSession {
 
   bool Function(RingFrame frame) _payloadIs(int status) {
     return (frame) => frame.payload.length == 1 && frame.payload[0] == status;
+  }
+
+  bool Function(RingFrame frame) _payloadStatusIn(Set<int> statuses) {
+    return (frame) =>
+        frame.payload.isNotEmpty && statuses.contains(frame.payload[0]);
+  }
+
+  RingScreenDirection _parseScreenDirectionPayload(Uint8List payload) {
+    if (payload.length != 1) {
+      throw const FormatException('Screen direction payload must be 1 byte');
+    }
+    return RingScreenDirection.fromValue(payload[0]);
   }
 }
 

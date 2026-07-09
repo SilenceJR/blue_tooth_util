@@ -76,6 +76,7 @@ class UniversalBleTransport implements BleTransport {
             : universal.ScanFilter(
                 withServices: options.serviceIds,
                 withNamePrefix: options.namePrefixes,
+
               ),
         platformConfig: universal.PlatformConfig(
           android: universal.AndroidOptions(

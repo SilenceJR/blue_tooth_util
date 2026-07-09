@@ -62,7 +62,7 @@ class BlueToothSdk {
   Future<Result<void>> startScan({
     bool unfiltered = false,
     List<String> serviceIds = const [RingProtocol.serviceUuid],
-    List<String> namePrefixes = const [RingProtocol.deviceName,'Zikr'],
+    List<String> namePrefixes = const [RingProtocol.deviceName, 'Zikr'],
   }) {
     return _transport.startScan(
       BleScanOptions(
