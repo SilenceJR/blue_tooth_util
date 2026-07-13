@@ -568,33 +568,33 @@ class BleDebugController extends GetxController with WidgetsBindingObserver {
     _show(result, 'Screen off time set');
   }
 
-  Future<void> queryPrayerReminders() async {
-    final current = session.value;
-    if (current == null) return;
-    final result = await current.queryPrayerReminders();
-    if (result case Success<List<RingPrayerReminder>>(:final value)) {
-      prayerReminders.assignAll(value);
-    }
-    _show(result, 'Prayer reminders loaded');
-  }
+  // Future<void> queryPrayerReminders() async {
+  //   final current = session.value;
+  //   if (current == null) return;
+  //   final result = await current.queryPrayerReminders();
+  //   if (result case Success<List<RingPrayerReminder>>(:final value)) {
+  //     prayerReminders.assignAll(value);
+  //   }
+  //   _show(result, 'Prayer reminders loaded');
+  // }
 
-  Future<void> writeSamplePrayerReminder() async {
-    final current = session.value;
-    if (current == null) return;
-    final sample = [
-      const RingPrayerReminder(
-        enabled: true,
-        hour: 8,
-        minute: 30,
-        weekdaysMask: 0x7F,
-      ),
-    ];
-    final result = await current.setPrayerReminders(sample);
-    if (result.isSuccess) {
-      prayerReminders.assignAll(sample);
-    }
-    _show(result, 'Sample prayer reminder written');
-  }
+  // Future<void> writeSamplePrayerReminder() async {
+  //   final current = session.value;
+  //   if (current == null) return;
+  //   final sample = [
+  //     const RingPrayerReminder(
+  //       enabled: true,
+  //       hour: 8,
+  //       minute: 30,
+  //       weekdaysMask: 0x7F,
+  //     ),
+  //   ];
+  //   final result = await current.setPrayerReminders(sample);
+  //   if (result.isSuccess) {
+  //     prayerReminders.assignAll(sample);
+  //   }
+  //   _show(result, 'Sample prayer reminder written');
+  // }
 
   Future<void> softDisconnect() async {
     _manualDisconnected = true;
@@ -1134,17 +1134,17 @@ class _DevicePanel extends StatelessWidget {
                 controller.screenOffTime.value?.seconds.toString() ?? '-',
               ),
               _kv('Direction', controller.screenDirection.value?.label ?? '-'),
-              _kv(
-                'Reminders',
-                reminders.isEmpty
-                    ? '-'
-                    : reminders
-                          .map(
-                            (item) =>
-                                '${item.enabled ? 'on' : 'off'} ${item.timeText} ${item.everyDay ? 'daily' : 'mask ${item.weekdaysMask}'}',
-                          )
-                          .join('\n'),
-              ),
+              // _kv(
+              //   'Reminders',
+              //   reminders.isEmpty
+              //       ? '-'
+              //       : reminders
+              //             .map(
+              //               (item) =>
+              //                   '${item.enabled ? 'on' : 'off'} ${item.timeText} ${item.everyDay ? 'daily' : 'mask ${item.weekdaysMask}'}',
+              //             )
+              //             .join('\n'),
+              // ),
               _kv(
                 'Zikr day',
                 zikr == null
@@ -1250,18 +1250,18 @@ class _CommandPanel extends StatelessWidget {
                     enabled,
                     controller.softDisconnect,
                   ),
-                  _button(
-                    Icons.alarm,
-                    'Read reminders',
-                    enabled,
-                    controller.queryPrayerReminders,
-                  ),
-                  _button(
-                    Icons.alarm_add,
-                    'Write sample',
-                    enabled,
-                    controller.writeSamplePrayerReminder,
-                  ),
+                  // _button(
+                  //   Icons.alarm,
+                  //   'Read reminders',
+                  //   enabled,
+                  //   controller.queryPrayerReminders,
+                  // ),
+                  // _button(
+                  //   Icons.alarm_add,
+                  //   'Write sample',
+                  //   enabled,
+                  //   controller.writeSamplePrayerReminder,
+                  // ),
                   _button(
                     Icons.bluetooth_disabled,
                     'Disconnect',
