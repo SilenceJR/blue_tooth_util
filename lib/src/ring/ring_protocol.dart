@@ -9,43 +9,43 @@ enum RingCommand {
   ping(0x0001, 'PING'),
 
   /// 查询设备信息。
-  deviceInfo(0x0101, 'Device info'),
+  deviceInfo(0x0101, '查询设备信息'),
 
   /// 查询电量。
-  battery(0x0102, 'Battery'),
+  battery(0x0102, '查询电量'),
 
   /// 主动查询当前按键计数。
-  buttonCountQuery(0x0103, 'Button count query'),
+  buttonCountQuery(0x0103, '主动查询当前按键计数'),
 
   /// 开关实时运动上报。
-  sportRealtimeSwitch(0x0108, 'Realtime sport switch'),
+  sportRealtimeSwitch(0x0108, '开关实时运动上报'),
 
   /// 软断开蓝牙连接。
-  softDisconnect(0x0109, 'Soft disconnect'),
+  softDisconnect(0x0109, '软断开蓝牙连接'),
 
   /// 屏幕方向翻转。
-  screenFlip(0x010A, 'Screen flip'),
+  screenFlip(0x010A, '屏幕方向翻转'),
 
   /// 查询或接收当前屏幕方向。
-  screenDirection(0x010E, 'Screen direction'),
+  screenDirection(0x010E, '查询或接收当前屏幕方向'),
 
   /// 设置诵经提醒表。
-  prayerReminderSet(0x010F, 'Prayer reminder set'),
+  prayerReminderSet(0x010F, '设置诵经提醒表'),
 
   /// 查询诵经提醒表。
-  prayerReminderQuery(0x0110, 'Prayer reminder query'),
+  prayerReminderQuery(0x0110, '查询诵经提醒表'),
 
   /// 寻找戒指。
-  findRing(0x010B, 'Find ring'),
+  findRing(0x010B, '寻找戒指'),
 
   /// 确认并清除某天历史赞念数据。
-  clearZikrHistoryDay(0x010C, 'Clear zikr history day'),
+  clearZikrHistoryDay(0x010C, '确认并清除某天历史赞念数据'),
 
   /// 设置或接收息屏时间。
-  screenOffTime(0x010D, 'Screen off time'),
+  screenOffTime(0x010D, '设置或接收息屏时间'),
 
   /// 设置设备时间。
-  setTime(0x0201, 'Set time'),
+  setTime(0x0201, '设置设备时间'),
 
   /// 设备主动上报实时运动数据。
   sportRealtimeReport(0x0303, 'Realtime sport report'),
@@ -54,13 +54,13 @@ enum RingCommand {
   buttonCountReport(0x0304, 'Button count report'),
 
   /// 设备主动上报电量变化。
-  batteryReport(0x0305, 'Battery report'),
+  batteryReport(0x0305, '设备主动上报电量变化'),
 
   /// 设备主动上报赞念小时桶数据。
-  zikrHourlyReport(0x0306, 'Zikr hourly report'),
+  zikrHourlyReport(0x0306, '设备主动上报赞念小时桶数据'),
 
   /// 查询设备当前时间。
-  queryTime(0x0502, 'Query time');
+  queryTime(0x0502, '查询设备当前时间');
 
   /// [value] 为 16-bit 命令字；[label] 为调试日志显示名称。
   const RingCommand(this.value, this.label);
