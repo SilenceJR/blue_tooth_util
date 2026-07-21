@@ -105,7 +105,7 @@ class BlueToothSdk {
       autoConnect: autoConnect,
     );
 
-    if (connectResult case Error(:final error)) {
+    if (connectResult case Err(:final error)) {
       return Result.err(error);
     }
 
@@ -114,7 +114,7 @@ class BlueToothSdk {
       transport: _transport,
     );
     final initializeResult = await session.initialize();
-    if (initializeResult case Error(:final error)) {
+    if (initializeResult case Err(:final error)) {
       return Result.err(error);
     }
     return Result.ok(session);

@@ -1,13 +1,11 @@
 import 'dart:async';
 import 'dart:collection';
-import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:common/common.dart';
 
 import '../common/ble_failure.dart';
 import '../common/hex_utils.dart';
-import '../common/result.dart';
 import '../core/ble_scan_device.dart';
 import '../core/ble_session.dart';
 import '../core/ble_transport.dart';
@@ -152,7 +150,7 @@ class RingBleSession implements BleSession {
 
     await _transport.requestMtu(deviceId, RingProtocol.requestedMtu);
     final servicesResult = await _transport.discoverServices(deviceId);
-    if (servicesResult case Error(:final error)) {
+    if (servicesResult case Err(:final error)) {
       return Result.err(error);
     }
     final services = servicesResult.valueOrNull ?? [];
@@ -273,7 +271,7 @@ class RingBleSession implements BleSession {
       payload: Uint8List.fromList(payload),
       predicate: _payloadStatusIn({1, 2}),
     );
-    if (accepted case Error(:final error)) {
+    if (accepted case Err(:final error)) {
       _screenFlipBusy = false;
       if (_screenFlipDone == done) {
         _screenFlipDone = null;
@@ -332,7 +330,7 @@ class RingBleSession implements BleSession {
       payload: Uint8List.fromList([1]),
       predicate: _payloadStatusIn({1, 2}),
     );
-    if (accepted case Error(:final error)) {
+    if (accepted case Err(:final error)) {
       _findRingBusy = false;
       if (_findRingDone == done) {
         _findRingDone = null;
@@ -498,7 +496,7 @@ class RingBleSession implements BleSession {
       RingProtocol.writeCharacteristicUuid,
       frame,
     );
-    if (writeResult case Error(:final error)) {
+    if (writeResult case Err(:final error)) {
       _pendingFrames.remove(pending);
       pending.complete(Result.err(error));
     }
@@ -602,7 +600,7 @@ class RingBleSession implements BleSession {
     //       ),
     //     );
     //     _handleFrame(value);
-    //   case Error<void, RingFrame>(:final error):
+    //   case Err<void, RingFrame>(:final error):
     //     _errors.add(error);
     // }
   }
