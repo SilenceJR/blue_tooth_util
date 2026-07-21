@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:tostore/tostore.dart';
+import 'package:common/common.dart';
 
 void main() {
   runApp(const BleDebugApp());
@@ -383,11 +384,10 @@ class BleDebugController extends GetxController with WidgetsBindingObserver {
 
   Future<void> refreshAvailability() async {
     final result = await sdk.getAvailability();
-    if (result case Success<BleAvailability>(:final value)) {
-      availability.value = value;
-    } else if (result case Failure<BleAvailability>(:final failure)) {
-      message.value = failure.message;
-    }
+    result.match(
+      ok: (value) => availability.value = value,
+      err: (err) => message.value = err.message,
+    );
   }
 
   Future<void> startScan({bool unfiltered = false}) async {
@@ -395,7 +395,7 @@ class BleDebugController extends GetxController with WidgetsBindingObserver {
     scanning.value = true;
     final result = await sdk.startScan(unfiltered: unfiltered);
     _show(result, unfiltered ? 'Unfiltered scan started' : 'Ring scan started');
-    if (result.isFailure) scanning.value = false;
+    if (result.isErr) scanning.value = false;
   }
 
   Future<void> stopScan() async {
@@ -409,8 +409,8 @@ class BleDebugController extends GetxController with WidgetsBindingObserver {
     connecting.value = true;
     final result = await sdk.connect(device);
     connecting.value = false;
-    switch (result) {
-      case Success<BleSession>(:final value):
+    result.match(
+      ok: (value) async {
         final ringSession = value as RingBleSession;
         final cached = CachedBleDevice(
           deviceId: device.deviceId,
@@ -426,9 +426,9 @@ class BleDebugController extends GetxController with WidgetsBindingObserver {
         await _saveConnectedDevice(cached);
         unawaited(queryDeviceInfo());
         message.value = 'Connected ${device.name ?? device.deviceId}';
-      case Failure<BleSession>(:final failure):
-        message.value = failure.message;
-    }
+      },
+      err: (err) => message.value = err.message,
+    );
   }
 
   Future<void> connectCached(
@@ -445,11 +445,13 @@ class BleDebugController extends GetxController with WidgetsBindingObserver {
     _show(result, 'Disconnected');
   }
 
-  Future<Result<void>> _disconnectCurrent({required bool disposeOnly}) async {
+  Future<Result<void, dynamic>> _disconnectCurrent({
+    required bool disposeOnly,
+  }) async {
     final current = session.value;
-    if (current == null) return const Result.success(null);
+    if (current == null) return const Result.ok(null);
     final result = disposeOnly
-        ? const Result.success(null)
+        ? const Result.ok(null)
         : await current.disconnect();
     await _clearSession(current);
     return result;
@@ -475,10 +477,14 @@ class BleDebugController extends GetxController with WidgetsBindingObserver {
     final current = session.value;
     if (current == null) return;
     final result = await current.queryDeviceInfo();
-    if (result case Success<RingDeviceInfo>(:final value)) {
+    result.map((value) async {
       deviceInfo.value = value;
       await _saveDeviceInfo(value);
-    }
+    });
+    // if (result case Success<RingDeviceInfo>(:final value)) {
+    //   deviceInfo.value = value;
+    //   await _saveDeviceInfo(value);
+    // }
     _show(result, 'Device info loaded');
   }
 
@@ -486,9 +492,9 @@ class BleDebugController extends GetxController with WidgetsBindingObserver {
     final current = session.value;
     if (current == null) return;
     final result = await current.queryBattery();
-    if (result case Success<RingBattery>(:final value)) {
+    result.map((value) {
       battery.value = value;
-    }
+    });
     _show(result, 'Battery loaded');
   }
 
@@ -496,9 +502,9 @@ class BleDebugController extends GetxController with WidgetsBindingObserver {
     final current = session.value;
     if (current == null) return;
     final result = await current.queryButtonCount();
-    if (result case Success<RingButtonCount>(:final value)) {
+    result.map((value) {
       buttonCount.value = value;
-    }
+    });
     _show(result, 'Button count loaded');
   }
 
@@ -509,16 +515,14 @@ class BleDebugController extends GetxController with WidgetsBindingObserver {
 
   Future<void> queryTime() async {
     final result = await session.value?.queryTime();
-    if (result case Success<DateTime>(:final value)) {
-      ringTime.value = value;
-    }
+    result?.map((value) => ringTime.value = value);
     _show(result, 'Time loaded');
   }
 
   Future<void> toggleRealtimeSport() async {
     final enabled = !realtimeSportEnabled.value;
     final result = await session.value?.setRealtimeSportEnabled(enabled);
-    if (result?.isSuccess ?? false) realtimeSportEnabled.value = enabled;
+    if (result?.isOk ?? false) realtimeSportEnabled.value = enabled;
     _show(
       result,
       enabled ? 'Realtime sport enabled' : 'Realtime sport disabled',
@@ -530,9 +534,9 @@ class BleDebugController extends GetxController with WidgetsBindingObserver {
     if (current == null || flipping.value) return;
     flipping.value = true;
     final result = await current.flipScreen();
-    if (result case Success<RingScreenDirection>(:final value)) {
+    result.map((value) {
       screenDirection.value = value;
-    }
+    });
     flipping.value = false;
     _show(result, 'Screen flip done');
   }
@@ -541,9 +545,9 @@ class BleDebugController extends GetxController with WidgetsBindingObserver {
     final current = session.value;
     if (current == null) return;
     final result = await current.queryScreenDirection();
-    if (result case Success<RingScreenDirection>(:final value)) {
+    result.map((value) {
       screenDirection.value = value;
-    }
+    });
     _show(result, 'Screen direction loaded');
   }
 
@@ -599,7 +603,7 @@ class BleDebugController extends GetxController with WidgetsBindingObserver {
   Future<void> softDisconnect() async {
     _manualDisconnected = true;
     final result = await session.value?.softDisconnect();
-    if (result?.isSuccess ?? false) {
+    if (result?.isOk ?? false) {
       final current = session.value;
       if (current != null) {
         await _clearSession(current);
@@ -741,14 +745,12 @@ class BleDebugController extends GetxController with WidgetsBindingObserver {
         '$direction${detail == null ? '' : ': $detail'}';
   }
 
-  void _show<T>(Result<T>? result, String successMessage) {
+  void _show<T>(Result<T, dynamic>? result, String successMessage) {
     if (result == null) return;
-    switch (result) {
-      case Success<T>():
-        message.value = successMessage;
-      case Failure<T>(:final failure):
-        message.value = failure.message;
-    }
+    result.match(
+      ok: (value) => message.value = successMessage,
+      err: (err) => message.value = err.message,
+    );
   }
 
   @override

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:common/common.dart';
 import 'package:universal_ble/universal_ble.dart' as universal;
 
 import '../common/ble_failure.dart';
@@ -33,14 +34,14 @@ class UniversalBleTransport implements BleTransport {
   }
 
   @override
-  Future<Result<void>> requestPermissions() async {
+  Future<Result<void,BleFailure>> requestPermissions() async {
     try {
       await universal.UniversalBle.requestPermissions(
         withAndroidFineLocation: false,
       );
-      return const Result.success(null);
+      return const Result.ok(null);
     } catch (error) {
-      return Result.failure(
+      return Result.err(
         BleFailure(
           code: BleFailureCode.permissionDenied,
           message: 'Bluetooth permission denied',
@@ -51,13 +52,13 @@ class UniversalBleTransport implements BleTransport {
   }
 
   @override
-  Future<Result<BleAvailability>> getAvailability() async {
+  Future<Result<BleAvailability,BleFailure>> getAvailability() async {
     try {
       final state =
           await universal.UniversalBle.getBluetoothAvailabilityState();
-      return Result.success(_mapAvailability(state));
+      return Result.ok(_mapAvailability(state));
     } catch (error) {
-      return Result.failure(
+      return Result.err(
         BleFailure(
           code: BleFailureCode.bluetoothUnavailable,
           message: 'Unable to read Bluetooth availability',
@@ -68,7 +69,7 @@ class UniversalBleTransport implements BleTransport {
   }
 
   @override
-  Future<Result<void>> startScan(BleScanOptions options) async {
+  Future<Result<void,BleFailure>> startScan(BleScanOptions options) async {
     try {
       await universal.UniversalBle.startScan(
         scanFilter: options.unfiltered
@@ -87,9 +88,9 @@ class UniversalBleTransport implements BleTransport {
           web: universal.WebOptions(optionalServices: options.serviceIds),
         ),
       );
-      return const Result.success(null);
+      return const Result.ok(null);
     } catch (error) {
-      return Result.failure(
+      return Result.err(
         BleFailure(
           code: BleFailureCode.scanFailed,
           message: 'Unable to start BLE scan',
@@ -100,12 +101,12 @@ class UniversalBleTransport implements BleTransport {
   }
 
   @override
-  Future<Result<void>> stopScan() async {
+  Future<Result<void,BleFailure>> stopScan() async {
     try {
       await universal.UniversalBle.stopScan();
-      return const Result.success(null);
+      return const Result.ok(null);
     } catch (error) {
-      return Result.failure(
+      return Result.err(
         BleFailure(
           code: BleFailureCode.scanFailed,
           message: 'Unable to stop BLE scan',
@@ -116,7 +117,7 @@ class UniversalBleTransport implements BleTransport {
   }
 
   @override
-  Future<Result<void>> connect(
+  Future<Result<void,BleFailure>> connect(
     String deviceId, {
     Duration timeout = const Duration(seconds: 20),
     bool autoConnect = false,
@@ -127,9 +128,9 @@ class UniversalBleTransport implements BleTransport {
         timeout: timeout,
         autoConnect: autoConnect,
       );
-      return const Result.success(null);
+      return const Result.ok(null);
     } catch (error) {
-      return Result.failure(
+      return Result.err(
         BleFailure(
           code: BleFailureCode.connectionFailed,
           message: 'Unable to connect device',
@@ -140,12 +141,12 @@ class UniversalBleTransport implements BleTransport {
   }
 
   @override
-  Future<Result<void>> disconnect(String deviceId) async {
+  Future<Result<void,BleFailure>> disconnect(String deviceId) async {
     try {
       await universal.UniversalBle.disconnect(deviceId);
-      return const Result.success(null);
+      return const Result.ok(null);
     } catch (error) {
-      return Result.failure(
+      return Result.err(
         BleFailure(
           code: BleFailureCode.connectionFailed,
           message: 'Unable to disconnect device',
@@ -156,15 +157,15 @@ class UniversalBleTransport implements BleTransport {
   }
 
   @override
-  Future<Result<int>> requestMtu(String deviceId, int expectedMtu) async {
+  Future<Result<int,BleFailure>> requestMtu(String deviceId, int expectedMtu) async {
     try {
       final mtu = await universal.UniversalBle.requestMtu(
         deviceId,
         expectedMtu,
       );
-      return Result.success(mtu);
+      return Result.ok(mtu);
     } catch (error) {
-      return Result.failure(
+      return Result.err(
         BleFailure(
           code: BleFailureCode.unsupported,
           message: 'Unable to request MTU',
@@ -175,14 +176,14 @@ class UniversalBleTransport implements BleTransport {
   }
 
   @override
-  Future<Result<List<BleDiscoveredService>>> discoverServices(
+  Future<Result<List<BleDiscoveredService>,BleFailure>> discoverServices(
     String deviceId,
   ) async {
     try {
       final services = await universal.UniversalBle.discoverServices(deviceId);
-      return Result.success(services.map(_mapService).toList());
+      return Result.ok(services.map(_mapService).toList());
     } catch (error) {
-      return Result.failure(
+      return Result.err(
         BleFailure(
           code: BleFailureCode.serviceNotFound,
           message: 'Unable to discover services',
@@ -193,7 +194,7 @@ class UniversalBleTransport implements BleTransport {
   }
 
   @override
-  Future<Result<void>> subscribeNotifications(
+  Future<Result<void,BleFailure>> subscribeNotifications(
     String deviceId,
     String serviceId,
     String characteristicId,
@@ -204,9 +205,9 @@ class UniversalBleTransport implements BleTransport {
         serviceId,
         characteristicId,
       );
-      return const Result.success(null);
+      return const Result.ok(null);
     } catch (error) {
-      return Result.failure(
+      return Result.err(
         BleFailure(
           code: BleFailureCode.characteristicNotFound,
           message: 'Unable to subscribe notifications',
@@ -217,7 +218,7 @@ class UniversalBleTransport implements BleTransport {
   }
 
   @override
-  Future<Result<void>> write(
+  Future<Result<void,BleFailure>> write(
     String deviceId,
     String serviceId,
     String characteristicId,
@@ -232,9 +233,9 @@ class UniversalBleTransport implements BleTransport {
         value,
         withoutResponse: withoutResponse,
       );
-      return const Result.success(null);
+      return const Result.ok(null);
     } catch (error) {
-      return Result.failure(
+      return Result.err(
         BleFailure(
           code: BleFailureCode.writeFailed,
           message: 'Unable to write BLE characteristic',

@@ -1,3 +1,6 @@
+import 'package:blue_tooth_util/src/common/ble_failure.dart';
+import 'package:common/common.dart';
+
 import '../common/result.dart';
 import '../core/ble_protocol_adapter.dart';
 import '../core/ble_scan_device.dart';
@@ -28,7 +31,7 @@ class RingProtocolAdapter implements BleProtocolAdapter<RingBleSession> {
         .contains(RingProtocol.serviceUuid);
     final hasRingManufacturerData = RingAdvertisement.fromScanDevice(
       device,
-    ).isSuccess;
+    ).isOk;
     return name.startsWith(RingProtocol.deviceName) ||
         advertisesService ||
         hasRingManufacturerData;
@@ -38,7 +41,7 @@ class RingProtocolAdapter implements BleProtocolAdapter<RingBleSession> {
   ///
   /// [device] 为扫描结果；成功时返回 MAC、固件版本、客户 id、机器 id、
   /// 绑定能力和绑定状态等结构化字段。
-  Result<RingAdvertisement> parseAdvertisement(BleScanDevice device) {
+  Result<RingAdvertisement, BleFailure> parseAdvertisement(BleScanDevice device) {
     return RingAdvertisement.fromScanDevice(device);
   }
 

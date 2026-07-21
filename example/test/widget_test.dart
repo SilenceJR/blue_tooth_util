@@ -20,7 +20,7 @@ void main() {
   testWidgets('BLE debug page renders', (WidgetTester tester) async {
     Get.put(
       BleDebugController(
-        sdk: BlueToothSdk(transport: _FakeBleTransport()),
+        // sdk: BlueToothSdk(transport: _FakeBleTransport()),
         cache: _FakeBleDebugCache(),
       ),
     );
@@ -68,92 +68,92 @@ class _FakeBleDebugCache implements BleDebugCache {
   }
 }
 
-class _FakeBleTransport implements BleTransport {
-  final _scan = StreamController<BleScanDevice>.broadcast();
-  final _availability = StreamController<BleAvailability>.broadcast();
-  final _connection = StreamController<bool>.broadcast();
-  final _values = StreamController<Uint8List>.broadcast();
-
-  @override
-  Stream<BleAvailability> get availabilityStream => _availability.stream;
-
-  @override
-  Stream<BleScanDevice> get scanStream => _scan.stream;
-
-  @override
-  Stream<bool> connectionStream(String deviceId) => _connection.stream;
-
-  @override
-  Stream<Uint8List> valueStream(String deviceId, String characteristicId) {
-    return _values.stream;
-  }
-
-  @override
-  Future<Result<void>> connect(
-    String deviceId, {
-    Duration timeout = const Duration(seconds: 20),
-    bool autoConnect = false,
-  }) async {
-    return const Result.success(null);
-  }
-
-  @override
-  Future<Result<void>> disconnect(String deviceId) async {
-    return const Result.success(null);
-  }
-
-  @override
-  void dispose() {}
-
-  @override
-  Future<Result<List<BleDiscoveredService>>> discoverServices(
-    String deviceId,
-  ) async {
-    return const Result.success([]);
-  }
-
-  @override
-  Future<Result<BleAvailability>> getAvailability() async {
-    return const Result.success(BleAvailability.poweredOn);
-  }
-
-  @override
-  Future<Result<void>> requestPermissions() async {
-    return const Result.success(null);
-  }
-
-  @override
-  Future<Result<int>> requestMtu(String deviceId, int expectedMtu) async {
-    return Result.success(expectedMtu);
-  }
-
-  @override
-  Future<Result<void>> startScan(BleScanOptions options) async {
-    return const Result.success(null);
-  }
-
-  @override
-  Future<Result<void>> stopScan() async {
-    return const Result.success(null);
-  }
-
-  @override
-  Future<Result<void>> subscribeNotifications(
-    String deviceId,
-    String serviceId,
-    String characteristicId,
-  ) async {
-    return const Result.success(null);
-  }
-
-  @override
-  Future<Result<void>> write(
-    String deviceId,
-    String serviceId,
-    String characteristicId,
-    Uint8List value, {
-    bool withoutResponse = false,
-  }) async {
-    return const Result.success(null);
-  }
-}
+// class _FakeBleTransport implements BleTransport {
+//   final _scan = StreamController<BleScanDevice>.broadcast();
+//   final _availability = StreamController<BleAvailability>.broadcast();
+//   final _connection = StreamController<bool>.broadcast();
+//   final _values = StreamController<Uint8List>.broadcast();
+//
+//   @override
+//   Stream<BleAvailability> get availabilityStream => _availability.stream;
+//
+//   @override
+//   Stream<BleScanDevice> get scanStream => _scan.stream;
+//
+//   @override
+//   Stream<bool> connectionStream(String deviceId) => _connection.stream;
+//
+//   @override
+//   Stream<Uint8List> valueStream(String deviceId, String characteristicId) {
+//     return _values.stream;
+//   }
+//
+//   // @override
+//   // Future<Result<void>> connect(
+//   //   String deviceId, {
+//   //   Duration timeout = const Duration(seconds: 20),
+//   //   bool autoConnect = false,
+//   // }) async {
+//   //   return const Result.success(null);
+//   // }
+//   //
+//   // @override
+//   // Future<Result<void>> disconnect(String deviceId) async {
+//   //   return const Result.success(null);
+//   // }
+//   //
+//   // @override
+//   // void dispose() {}
+//   //
+//   // @override
+//   // Future<Result<List<BleDiscoveredService>>> discoverServices(
+//   //   String deviceId,
+//   // ) async {
+//   //   return const Result.success([]);
+//   // }
+//   //
+//   // @override
+//   // Future<Result<BleAvailability>> getAvailability() async {
+//   //   return const Result.success(BleAvailability.poweredOn);
+//   // }
+//   //
+//   // @override
+//   // Future<Result<void>> requestPermissions() async {
+//   //   return const Result.success(null);
+//   // }
+//   //
+//   // @override
+//   // Future<Result<int>> requestMtu(String deviceId, int expectedMtu) async {
+//   //   return Result.success(expectedMtu);
+//   // }
+//   //
+//   // @override
+//   // Future<Result<void>> startScan(BleScanOptions options) async {
+//   //   return const Result.success(null);
+//   // }
+//   //
+//   // @override
+//   // Future<Result<void>> stopScan() async {
+//   //   return const Result.success(null);
+//   // }
+//   //
+//   // @override
+//   // Future<Result<void>> subscribeNotifications(
+//   //   String deviceId,
+//   //   String serviceId,
+//   //   String characteristicId,
+//   // ) async {
+//   //   return const Result.success(null);
+//   // }
+//   //
+//   // @override
+//   // Future<Result<void>> write(
+//   //   String deviceId,
+//   //   String serviceId,
+//   //   String characteristicId,
+//   //   Uint8List value, {
+//   //   bool withoutResponse = false,
+//   // }) async {
+//   //   return const Result.success(null);
+//   // }
+// }

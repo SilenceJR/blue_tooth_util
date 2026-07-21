@@ -1,5 +1,7 @@
 import 'dart:typed_data';
 
+import 'package:common/common.dart';
+
 import '../common/ble_failure.dart';
 import '../common/result.dart';
 
@@ -215,7 +217,7 @@ class RingFrameCodec {
   ///
   /// [frame] 必须包含头、命令、包字段、payload、CRC 和尾。
   /// CRC、头尾和长度不合法时返回 [Result.failure]。
-  Result<RingFrame> decode(Uint8List frame) {
+  Result<RingFrame, BleFailure> decode(Uint8List frame) {
     if (frame.length < 14) {
       return _invalid('Frame too short');
     }
@@ -232,7 +234,7 @@ class RingFrameCodec {
     final packetSeq = _getUint16(frame, 6);
     final payloadLength = _getUint16(frame, 8);
     if (totalPackets != 1 || packetSeq != 1) {
-      return Result.failure(
+      return Result.err(
         BleFailure(
           code: BleFailureCode.unsupported,
           message: 'Multi-packet ring frames are not supported',
@@ -246,7 +248,7 @@ class RingFrameCodec {
     final expectedCrc = _getUint16(frame, 10 + payloadLength);
     final actualCrc = crc16Modbus(frame.sublist(2, 10 + payloadLength));
     if (expectedCrc != actualCrc) {
-      return Result.failure(
+      return Result.err(
         BleFailure(
           code: BleFailureCode.crcMismatch,
           message: 'Ring frame CRC mismatch',
@@ -254,7 +256,7 @@ class RingFrameCodec {
       );
     }
 
-    return Result.success(
+    return Result.ok(
       RingFrame(
         commandValue: commandValue,
         payload: Uint8List.fromList(frame.sublist(10, 10 + payloadLength)),
@@ -280,8 +282,8 @@ class RingFrameCodec {
     return crc & 0xFFFF;
   }
 
-  static Result<RingFrame> _invalid(String message) {
-    return Result.failure(
+  static Result<RingFrame, BleFailure> _invalid(String message) {
+    return Result.err(
       BleFailure(code: BleFailureCode.invalidFrame, message: message),
     );
   }

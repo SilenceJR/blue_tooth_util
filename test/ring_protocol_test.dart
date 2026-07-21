@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:blue_tooth_util/blue_tooth_util.dart';
+import 'package:common/common.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -196,7 +197,7 @@ void main() {
         final sdk = BlueToothSdk(transport: transport);
         final result = await sdk.connect(_device());
 
-        expect(result.isSuccess, true);
+        expect(result.isOk, true);
         expect(transport.calls, [
           'stopScan',
           'connect',
@@ -307,7 +308,7 @@ void main() {
       expect(transport.writes.last, contains('0D 01'));
 
       transport.emit(RingCommand.screenOffTime, const [1]);
-      expect((await future).isSuccess, true);
+      expect((await future).isOk, true);
       await Future<void>.delayed(Duration.zero);
       expect(reports, isEmpty);
 
@@ -395,27 +396,27 @@ class FakeBleTransport implements BleTransport {
   }
 
   @override
-  Future<Result<void>> connect(
+  Future<Result<void, BleFailure>> connect(
     String deviceId, {
     Duration timeout = const Duration(seconds: 20),
     bool autoConnect = false,
   }) async {
     calls.add('connect');
-    return const Result.success(null);
+    return const Result.ok(null);
   }
 
   @override
-  Future<Result<void>> disconnect(String deviceId) async {
+  Future<Result<void, BleFailure>> disconnect(String deviceId) async {
     calls.add('disconnect');
-    return const Result.success(null);
+    return const Result.ok(null);
   }
 
   @override
-  Future<Result<List<BleDiscoveredService>>> discoverServices(
+  Future<Result<List<BleDiscoveredService>, BleFailure>> discoverServices(
     String deviceId,
   ) async {
     calls.add('discoverServices');
-    return const Result.success([
+    return const Result.ok([
       BleDiscoveredService(
         uuid: RingProtocol.serviceUuid,
         characteristics: [
@@ -431,45 +432,45 @@ class FakeBleTransport implements BleTransport {
   }
 
   @override
-  Future<Result<BleAvailability>> getAvailability() async {
-    return const Result.success(BleAvailability.poweredOn);
+  Future<Result<BleAvailability, BleFailure>> getAvailability() async {
+    return const Result.ok(BleAvailability.poweredOn);
   }
 
   @override
-  Future<Result<void>> requestPermissions() async {
-    return const Result.success(null);
+  Future<Result<void,BleFailure>> requestPermissions() async {
+    return const Result.ok(null);
   }
 
   @override
-  Future<Result<int>> requestMtu(String deviceId, int expectedMtu) async {
+  Future<Result<int, BleFailure>> requestMtu(String deviceId, int expectedMtu) async {
     calls.add('requestMtu:$expectedMtu');
-    return Result.success(expectedMtu);
+    return Result.ok(expectedMtu);
   }
 
   @override
-  Future<Result<void>> startScan(BleScanOptions options) async {
+  Future<Result<void,BleFailure>> startScan(BleScanOptions options) async {
     calls.add('startScan');
-    return const Result.success(null);
+    return const Result.ok(null);
   }
 
   @override
-  Future<Result<void>> stopScan() async {
+  Future<Result<void,BleFailure>> stopScan() async {
     calls.add('stopScan');
-    return const Result.success(null);
+    return const Result.ok(null);
   }
 
   @override
-  Future<Result<void>> subscribeNotifications(
+  Future<Result<void,BleFailure>> subscribeNotifications(
     String deviceId,
     String serviceId,
     String characteristicId,
   ) async {
     calls.add('subscribeNotifications');
-    return const Result.success(null);
+    return const Result.ok(null);
   }
 
   @override
-  Future<Result<void>> write(
+  Future<Result<void,BleFailure>> write(
     String deviceId,
     String serviceId,
     String characteristicId,
@@ -478,11 +479,11 @@ class FakeBleTransport implements BleTransport {
   }) async {
     writes.add(bytesToHex(value));
     if (failWrites) {
-      return const Result.failure(
+      return const Result.err(
         BleFailure(code: BleFailureCode.writeFailed, message: 'boom'),
       );
     }
-    return const Result.success(null);
+    return const Result.ok(null);
   }
 
   void emit(RingCommand command, List<int> payload) {

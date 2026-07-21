@@ -1,7 +1,8 @@
 import 'dart:async';
 
+import 'package:common/common.dart';
+
 import '../common/ble_failure.dart';
-import '../common/result.dart';
 import '../ring/ring_protocol.dart';
 import '../ring/ring_protocol_adapter.dart';
 import 'ble_protocol_adapter.dart';
@@ -46,12 +47,12 @@ class BlueToothSdk {
   }
 
   /// 请求蓝牙运行时权限。
-  Future<Result<void>> requestPermissions() {
+  Future<Result<void,BleFailure>> requestPermissions() {
     return _transport.requestPermissions();
   }
 
   /// 获取当前蓝牙可用状态。
-  Future<Result<BleAvailability>> getAvailability() {
+  Future<Result<BleAvailability,BleFailure>> getAvailability() {
     return _transport.getAvailability();
   }
 
@@ -59,7 +60,7 @@ class BlueToothSdk {
   ///
   /// [unfiltered] 为 true 时扫描全部设备；为 false 时默认按智能戒指名称
   /// 和 Service UUID 过滤。[serviceIds] 和 [namePrefixes] 可覆盖默认过滤条件。
-  Future<Result<void>> startScan({
+  Future<Result<void,BleFailure>> startScan({
     bool unfiltered = false,
     List<String> serviceIds = const [RingProtocol.serviceUuid],
     List<String> namePrefixes = const [RingProtocol.deviceName, 'Zikr'],
@@ -74,7 +75,7 @@ class BlueToothSdk {
   }
 
   /// 停止扫描。
-  Future<Result<void>> stopScan() {
+  Future<Result<void,BleFailure>> stopScan() {
     return _transport.stopScan();
   }
 
@@ -82,7 +83,7 @@ class BlueToothSdk {
   ///
   /// [device] 为扫描结果；[timeout] 为连接超时；
   /// [autoConnect] 控制是否启用平台自动重连。
-  Future<Result<BleSession>> connect(
+  Future<Result<BleSession,BleFailure>> connect(
     BleScanDevice device, {
     Duration timeout = const Duration(seconds: 20),
     bool autoConnect = false,
@@ -90,7 +91,7 @@ class BlueToothSdk {
     await _transport.stopScan();
     final adapter = _adapters.where((item) => item.matches(device)).firstOrNull;
     if (adapter == null) {
-      return Result.failure(
+      return Result.err(
         BleFailure(
           code: BleFailureCode.unsupported,
           message: 'No BLE protocol adapter matches this device',
@@ -103,8 +104,9 @@ class BlueToothSdk {
       timeout: timeout,
       autoConnect: autoConnect,
     );
-    if (connectResult case Failure<void>(:final failure)) {
-      return Result.failure(failure);
+
+    if (connectResult case Error(:final error)) {
+      return Result.err(error);
     }
 
     final session = adapter.createSession(
@@ -112,16 +114,16 @@ class BlueToothSdk {
       transport: _transport,
     );
     final initializeResult = await session.initialize();
-    if (initializeResult case Failure<void>(:final failure)) {
-      return Result.failure(failure);
+    if (initializeResult case Error(:final error)) {
+      return Result.err(error);
     }
-    return Result.success(session);
+    return Result.ok(session);
   }
 
   /// 按设备 ID 断开连接。
   ///
   /// [deviceId] 为平台设备标识。
-  Future<Result<void>> disconnect(String deviceId) {
+  Future<Result<void,BleFailure>> disconnect(String deviceId) {
     return _transport.disconnect(deviceId);
   }
 

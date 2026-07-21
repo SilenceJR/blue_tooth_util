@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:math';
 import 'dart:typed_data';
+
+import 'package:common/common.dart';
 
 import '../common/ble_failure.dart';
 import '../common/hex_utils.dart';
@@ -50,8 +53,8 @@ class RingBleSession implements BleSession {
   bool _initialized = false;
   bool _screenFlipBusy = false;
   bool _findRingBusy = false;
-  Completer<Result<RingScreenDirection>>? _screenFlipDone;
-  Completer<Result<void>>? _findRingDone;
+  Completer<Result<RingScreenDirection, BleFailure>>? _screenFlipDone;
+  Completer<Result<void, BleFailure>>? _findRingDone;
 
   final _logs = StreamController<RingFrameLog>.broadcast();
   final _errors = StreamController<BleFailure>.broadcast();
@@ -126,8 +129,8 @@ class RingBleSession implements BleSession {
   /// 初始化会话。
   ///
   /// 连接后应调用一次：请求 MTU、发现 GATT 服务、订阅 Notify。
-  Future<Result<void>> initialize() async {
-    if (_initialized) return const Result.success(null);
+  Future<Result<void, BleFailure>> initialize() async {
+    if (_initialized) return const Result.ok(null);
 
     _subscriptions.add(
       _transport
@@ -149,15 +152,12 @@ class RingBleSession implements BleSession {
 
     await _transport.requestMtu(deviceId, RingProtocol.requestedMtu);
     final servicesResult = await _transport.discoverServices(deviceId);
-    if (servicesResult case Failure<List<BleDiscoveredService>>(
-      :final failure,
-    )) {
-      return Result.failure(failure);
+    if (servicesResult case Error(:final error)) {
+      return Result.err(error);
     }
-    final services =
-        (servicesResult as Success<List<BleDiscoveredService>>).value;
+    final services = servicesResult.valueOrNull ?? [];
     if (!_containsRingCharacteristics(services)) {
-      return const Result.failure(
+      return const Result.err(
         BleFailure(
           code: BleFailureCode.serviceNotFound,
           message: 'Ring GATT service or characteristics were not found',
@@ -170,42 +170,38 @@ class RingBleSession implements BleSession {
       RingProtocol.serviceUuid,
       RingProtocol.notifyCharacteristicUuid,
     );
-    if (subscribeResult case Failure<void>(:final failure)) {
-      return Result.failure(failure);
+    if (subscribeResult.isErr) {
+      return Result.err(subscribeResult.failureOrNull!);
     }
-
     _initialized = true;
-    return const Result.success(null);
+    return const Result.ok(null);
   }
 
   /// 发送 PING 联调命令。
   ///
   /// [payload] 为任意测试字节，设备会原样回显。
-  Future<Result<Uint8List>> ping(List<int> payload) async {
+  Future<Result<Uint8List, BleFailure>> ping(List<int> payload) async {
     final result = await _sendAndWait(
       RingCommand.ping,
       payload: Uint8List.fromList(payload),
     );
-    return switch (result) {
-      Success<RingFrame>(:final value) => Result.success(value.payload),
-      Failure<RingFrame>(:final failure) => Result.failure(failure),
-    };
+    return result.match(ok: (value) => Result.ok(value.payload), err: (err) =>Result.err(err));
   }
 
   /// 查询设备信息。
-  Future<Result<RingDeviceInfo>> queryDeviceInfo() async {
+  Future<Result<RingDeviceInfo, BleFailure>> queryDeviceInfo() async {
     final result = await _sendAndWait(RingCommand.deviceInfo);
     return _mapPayload(result, RingDeviceInfo.fromPayload);
   }
 
   /// 查询当前电量。
-  Future<Result<RingBattery>> queryBattery() async {
+  Future<Result<RingBattery, BleFailure>> queryBattery() async {
     final result = await _sendAndWait(RingCommand.battery);
     return _mapPayload(result, RingBattery.fromPayload);
   }
 
   /// 查询当前按键计数。
-  Future<Result<RingButtonCount>> queryButtonCount() async {
+  Future<Result<RingButtonCount, BleFailure>> queryButtonCount() async {
     final result = await _sendAndWait(RingCommand.buttonCountQuery);
     return _mapPayload(result, RingButtonCount.fromPayload);
   }
@@ -213,7 +209,7 @@ class RingBleSession implements BleSession {
   /// 开关实时运动上报。
   ///
   /// [enabled] 为 true 时开启约 2 秒一次的运动上报，false 时关闭。
-  Future<Result<void>> setRealtimeSportEnabled(bool enabled) async {
+  Future<Result<void, BleFailure>> setRealtimeSportEnabled(bool enabled) async {
     final result = await _sendAndWait(
       RingCommand.sportRealtimeSwitch,
       payload: Uint8List.fromList([enabled ? 1 : 2]),
@@ -224,10 +220,10 @@ class RingBleSession implements BleSession {
   /// 软断开蓝牙。
   ///
   /// 设备会先响应受理，再在约 300ms 后断开，用于 App 退出前释放链路。
-  Future<Result<void>> softDisconnect() async {
+  Future<Result<void, BleFailure>> softDisconnect() async {
     final result = await _sendAndWait(RingCommand.softDisconnect);
     final status = _expectStatus(result, 1);
-    if (status.isSuccess) {
+    if (status.isOk) {
       unawaited(_transport.disconnect(deviceId));
     }
     return status;
@@ -236,7 +232,7 @@ class RingBleSession implements BleSession {
   /// 设置设备时间。
   ///
   /// [dateTime] 会被编码成协议要求的 Unix 秒和时区字段。
-  Future<Result<void>> setTime(DateTime dateTime) async {
+  Future<Result<void, BleFailure>> setTime(DateTime dateTime) async {
     final result = await _sendAndWait(
       RingCommand.setTime,
       payload: ringTimePayload(dateTime),
@@ -245,7 +241,7 @@ class RingBleSession implements BleSession {
   }
 
   /// 查询设备当前时间。
-  Future<Result<DateTime>> queryTime() async {
+  Future<Result<DateTime, BleFailure>> queryTime() async {
     final result = await _sendAndWait(RingCommand.queryTime);
     return _mapPayload(result, ringParseTimePayload);
   }
@@ -254,17 +250,17 @@ class RingBleSession implements BleSession {
   ///
   /// [flipped] 为 null 时按固件 toggle 当前方向；true 表示翻转 180°；
   /// false 表示恢复正常方向。该命令会等待设备返回 DONE 后才完成。
-  Future<Result<RingScreenDirection>> flipScreen({bool? flipped}) async {
+  Future<Result<RingScreenDirection, BleFailure>> flipScreen({bool? flipped}) async {
     if (_screenFlipBusy) {
       final failure = const BleFailure(
         code: BleFailureCode.busy,
         message: 'Screen flip is waiting for DONE',
       );
       _emitActionFailure(RingCommand.screenFlip, failure);
-      return Result.failure(failure);
+      return Result.err(failure);
     }
     _screenFlipBusy = true;
-    final done = Completer<Result<RingScreenDirection>>();
+    final done = Completer<Result<RingScreenDirection, BleFailure>>();
     _screenFlipDone = done;
     _emitAction(
       RingCommand.screenFlip,
@@ -277,13 +273,13 @@ class RingBleSession implements BleSession {
       payload: Uint8List.fromList(payload),
       predicate: _payloadStatusIn({1, 2}),
     );
-    if (accepted case Failure<RingFrame>(:final failure)) {
+    if (accepted case Error(:final error)) {
       _screenFlipBusy = false;
       if (_screenFlipDone == done) {
         _screenFlipDone = null;
       }
-      _emitActionFailure(RingCommand.screenFlip, failure);
-      return Result.failure(failure);
+      _emitActionFailure(RingCommand.screenFlip, error);
+      return Result.err(error);
     }
     return done.future.timeout(
       const Duration(seconds: 5),
@@ -297,7 +293,7 @@ class RingBleSession implements BleSession {
           _screenFlipDone = null;
         }
         _emitActionFailure(RingCommand.screenFlip, failure);
-        return Result.failure(failure);
+        return Result.err(failure);
       },
     );
   }
@@ -305,7 +301,7 @@ class RingBleSession implements BleSession {
   /// 查询当前屏幕方向。
   ///
   /// 返回 `0x010E` 的 1 字节方向值，`0` 为正常，`1` 为翻转 180°。
-  Future<Result<RingScreenDirection>> queryScreenDirection() async {
+  Future<Result<RingScreenDirection, BleFailure>> queryScreenDirection() async {
     final result = await _sendAndWait(RingCommand.screenDirection);
     return _mapPayload(result, _parseScreenDirectionPayload);
   }
@@ -314,17 +310,17 @@ class RingBleSession implements BleSession {
   ///
   /// 戒指会振动并显示图标；方法会等待 App 停止、戒指按键停止或 10 秒超时
   /// 后设备返回 DONE。
-  Future<Result<void>> startFindRing() async {
+  Future<Result<void, BleFailure>> startFindRing() async {
     if (_findRingBusy) {
       final failure = const BleFailure(
         code: BleFailureCode.busy,
         message: 'Find ring is waiting for DONE',
       );
       _emitActionFailure(RingCommand.findRing, failure);
-      return Result.failure(failure);
+      return Result.err(failure);
     }
     _findRingBusy = true;
-    final done = Completer<Result<void>>();
+    final done = Completer<Result<void, BleFailure>>();
     _findRingDone = done;
     _emitAction(
       RingCommand.findRing,
@@ -336,13 +332,13 @@ class RingBleSession implements BleSession {
       payload: Uint8List.fromList([1]),
       predicate: _payloadStatusIn({1, 2}),
     );
-    if (accepted case Failure<RingFrame>(:final failure)) {
+    if (accepted case Error(:final error)) {
       _findRingBusy = false;
       if (_findRingDone == done) {
         _findRingDone = null;
       }
-      _emitActionFailure(RingCommand.findRing, failure);
-      return Result.failure(failure);
+      _emitActionFailure(RingCommand.findRing, error);
+      return Result.err(error);
     }
     return done.future.timeout(
       const Duration(seconds: 15),
@@ -356,7 +352,7 @@ class RingBleSession implements BleSession {
           _findRingDone = null;
         }
         _emitActionFailure(RingCommand.findRing, failure);
-        return Result.failure(failure);
+        return Result.err(failure);
       },
     );
   }
@@ -364,7 +360,7 @@ class RingBleSession implements BleSession {
   /// 停止寻找戒指。
   ///
   /// 若设备本就不在寻找，也会按协议立即返回 DONE。
-  Future<Result<void>> stopFindRing() async {
+  Future<Result<void, BleFailure>> stopFindRing() async {
     _emitAction(
       RingCommand.findRing,
       RingActionPhase.sending,
@@ -375,19 +371,19 @@ class RingBleSession implements BleSession {
       payload: Uint8List.fromList([2]),
       predicate: _payloadIs(2),
     );
-    return switch (result) {
-      Success<RingFrame>() => const Result.success(null),
-      Failure<RingFrame>(:final failure) => () {
-        _emitActionFailure(RingCommand.findRing, failure);
-        return Result<void>.failure(failure);
-      }(),
-    };
+    return result.match(
+      ok: (_) => const Result.ok(null),
+      err: (err) {
+        _emitActionFailure(RingCommand.findRing, err);
+        return Result.err(err);
+      },
+    );
   }
 
   /// 确认并清除某天历史赞念数据。
   ///
   /// [date] 为需要清除的公历日期；当天数据传入后设备会忽略。
-  Future<Result<void>> confirmZikrHistoryDay(DateTime date) async {
+  Future<Result<void, BleFailure>> confirmZikrHistoryDay(DateTime date) async {
     final result = await _sendAndWait(
       RingCommand.clearZikrHistoryDay,
       payload: Uint8List.fromList([date.year - 2000, date.month, date.day]),
@@ -398,9 +394,9 @@ class RingBleSession implements BleSession {
   /// 设置息屏/进睡时间。
   ///
   /// [seconds] 只能是 10、20、30、40、50、60。
-  Future<Result<void>> setScreenOffTime(int seconds) async {
+  Future<Result<void, BleFailure>> setScreenOffTime(int seconds) async {
     if (seconds < 10 || seconds > 60 || seconds % 10 != 0) {
-      return const Result.failure(
+      return const Result.err(
         BleFailure(
           code: BleFailureCode.protocolError,
           message: 'Screen off seconds must be 10,20,30,40,50,60',
@@ -426,7 +422,7 @@ class RingBleSession implements BleSession {
   /// 覆盖设置设备诵经提醒表。
   ///
   /// [reminders] 最多 8 条；每条包含开关、小时、分钟和星期重复位图。
-  // Future<Result<void>> setPrayerReminders(
+  // Future<Result<void,BleFailure>> setPrayerReminders(
   //   List<RingPrayerReminder> reminders,
   // ) async {
   //   final payload = RingPrayerReminder.listToPayload(reminders);
@@ -443,7 +439,7 @@ class RingBleSession implements BleSession {
 
   @override
   /// 主动断开当前设备。
-  Future<Result<void>> disconnect() {
+  Future<Result<void, BleFailure>> disconnect() {
     return _transport.disconnect(deviceId);
   }
 
@@ -475,7 +471,7 @@ class RingBleSession implements BleSession {
     await _actionState.close();
   }
 
-  Future<Result<RingFrame>> _sendAndWait(
+  Future<Result<RingFrame, BleFailure>> _sendAndWait(
     RingCommand command, {
     Uint8List? payload,
     bool Function(RingFrame frame)? predicate,
@@ -502,16 +498,16 @@ class RingBleSession implements BleSession {
       RingProtocol.writeCharacteristicUuid,
       frame,
     );
-    if (writeResult case Failure<void>(:final failure)) {
+    if (writeResult case Error(:final error)) {
       _pendingFrames.remove(pending);
-      pending.complete(Result.failure(failure));
+      pending.complete(Result.err(error));
     }
 
     return pending.future.timeout(
       const Duration(seconds: 5),
       onTimeout: () {
         _pendingFrames.remove(pending);
-        return Result.failure(
+        return Result.err(
           BleFailure(
             code: BleFailureCode.timeout,
             message: '${command.label} response timed out',
@@ -521,21 +517,23 @@ class RingBleSession implements BleSession {
     );
   }
 
-  Result<T> _mapPayload<T>(
-    Result<RingFrame> result,
+  Result<T, BleFailure> _mapPayload<T>(
+    Result<RingFrame, BleFailure> result,
     T Function(Uint8List payload) mapper,
   ) {
-    return switch (result) {
-      Success<RingFrame>(:final value) => _guard(() => mapper(value.payload)),
-      Failure<RingFrame>(:final failure) => Result.failure(failure),
-    };
+    return result.match(
+      ok: (value) {
+        return _guard(() => mapper(value.payload));
+      },
+      err: (err) => Result.err(err),
+    );
   }
 
-  Result<T> _guard<T>(T Function() action) {
+  Result<T, BleFailure> _guard<T>(T Function() action) {
     try {
-      return Result.success(action());
+      return Result.ok(action());
     } catch (error) {
-      return Result.failure(
+      return Result.err(
         BleFailure(
           code: BleFailureCode.protocolError,
           message: 'Unable to parse ring payload',
@@ -545,25 +543,30 @@ class RingBleSession implements BleSession {
     }
   }
 
-  Result<void> _expectStatus(Result<RingFrame> result, int status) {
-    return switch (result) {
-      Success<RingFrame>(:final value)
-          when value.payload.isNotEmpty && value.payload[0] == status =>
-        const Result.success(null),
-      Success<RingFrame>() => const Result.failure(
-        BleFailure(
-          code: BleFailureCode.protocolError,
-          message: 'Unexpected ring command status',
-        ),
-      ),
-      Failure<RingFrame>(:final failure) => Result.failure(failure),
-    };
+  Result<void, BleFailure> _expectStatus(
+    Result<RingFrame, BleFailure> result,
+    int status,
+  ) {
+    return result.match(
+      ok: (value) {
+        if (value.payload.isNotEmpty && value.payload[0] == status) {
+          return const Result.ok(null);
+        }
+        return const Result.err(
+          BleFailure(
+            code: BleFailureCode.protocolError,
+            message: 'Unexpected ring command status',
+          ),
+        );
+      },
+      err: (err) => Result.err(err),
+    );
   }
 
   void _handleNotifyValue(Uint8List value) {
     final result = _codec.decode(value);
-    switch (result) {
-      case Success<RingFrame>(:final value):
+    result.match(
+      ok: (value) {
         _logs.add(
           RingFrameLog(
             direction: 'RX',
@@ -578,9 +581,30 @@ class RingBleSession implements BleSession {
           ),
         );
         _handleFrame(value);
-      case Failure<RingFrame>(:final failure):
-        _errors.add(failure);
-    }
+      },
+      err: (err) {
+        _errors.add(err);
+      },
+    );
+    // switch (result) {
+    //   case Ok<RingFrame, void>(:final value):
+    //     _logs.add(
+    //       RingFrameLog(
+    //         direction: 'RX',
+    //         timestamp: DateTime.now(),
+    //         commandValue: value.commandValue,
+    //         command: value.command,
+    //         hex: bytesToHex(
+    //           _codec.encodeValue(value.commandValue, value.payload),
+    //         ),
+    //         error: value.deviceError,
+    //         description: value.deviceError?.message,
+    //       ),
+    //     );
+    //     _handleFrame(value);
+    //   case Error<void, RingFrame>(:final error):
+    //     _errors.add(error);
+    // }
   }
 
   void _handleFrame(RingFrame frame) {
@@ -591,13 +615,13 @@ class RingBleSession implements BleSession {
         message: error?.message ?? 'Ring device returned an error',
       );
       _failTwoStageCommand(frame.command, failure);
-      _completePending(frame, Result.failure(failure));
+      _completePending(frame, Result.err(failure));
       _errors.add(failure);
       return;
     }
 
     _dispatchBusinessEvent(frame);
-    _completePending(frame, Result.success(frame));
+    _completePending(frame, Result.ok(frame));
   }
 
   void _dispatchBusinessEvent(RingFrame frame) {
@@ -647,7 +671,7 @@ class RingBleSession implements BleSession {
                 screenDirection: direction,
                 message: 'Screen flip DONE, direction is ${direction.label}',
               );
-              _screenFlipDone?.complete(Result.success(direction));
+              _screenFlipDone?.complete(Result.ok(direction));
               _screenFlipDone = null;
             }
           }
@@ -658,9 +682,9 @@ class RingBleSession implements BleSession {
             );
           }
         case RingCommand.prayerReminderQuery:
-          // _prayerReminders.add(
-          //   RingPrayerReminder.listFromPayload(frame.payload),
-          // );
+        // _prayerReminders.add(
+        //   RingPrayerReminder.listFromPayload(frame.payload),
+        // );
         case RingCommand.findRing:
           if (frame.payload.length == 1) {
             if (frame.payload[0] == 1) {
@@ -678,7 +702,7 @@ class RingBleSession implements BleSession {
                 status: 2,
                 message: 'Find ring DONE received',
               );
-              _findRingDone?.complete(const Result.success(null));
+              _findRingDone?.complete(const Result.ok(null));
               _findRingDone = null;
             }
           }
@@ -736,7 +760,7 @@ class RingBleSession implements BleSession {
         if (_screenFlipBusy) {
           _screenFlipBusy = false;
           if (_screenFlipDone?.isCompleted == false) {
-            _screenFlipDone?.complete(Result.failure(failure));
+            _screenFlipDone?.complete(Result.err(failure));
           }
           _screenFlipDone = null;
           _emitActionFailure(RingCommand.screenFlip, failure);
@@ -745,7 +769,7 @@ class RingBleSession implements BleSession {
         if (_findRingBusy) {
           _findRingBusy = false;
           if (_findRingDone?.isCompleted == false) {
-            _findRingDone?.complete(Result.failure(failure));
+            _findRingDone?.complete(Result.err(failure));
           }
           _findRingDone = null;
           _emitActionFailure(RingCommand.findRing, failure);
@@ -763,7 +787,7 @@ class RingBleSession implements BleSession {
     }
   }
 
-  void _completePending(RingFrame frame, Result<RingFrame> result) {
+  void _completePending(RingFrame frame, Result<RingFrame, BleFailure> result) {
     _PendingFrame? match;
     for (final pending in _pendingFrames) {
       if (pending.commandValue == frame.commandValue &&
@@ -780,13 +804,13 @@ class RingBleSession implements BleSession {
   void _failPending(BleFailure failure) {
     _failActiveActions(failure);
     while (_pendingFrames.isNotEmpty) {
-      _pendingFrames.removeFirst().complete(Result.failure(failure));
+      _pendingFrames.removeFirst().complete(Result.err(failure));
     }
     if (_screenFlipDone?.isCompleted == false) {
-      _screenFlipDone?.complete(Result.failure(failure));
+      _screenFlipDone?.complete(Result.err(failure));
     }
     if (_findRingDone?.isCompleted == false) {
-      _findRingDone?.complete(Result.failure(failure));
+      _findRingDone?.complete(Result.err(failure));
     }
     _screenFlipBusy = false;
     _findRingBusy = false;
@@ -845,12 +869,12 @@ class _PendingFrame {
 
   final int commandValue;
   final bool Function(RingFrame frame) predicate;
-  final Completer<Result<RingFrame>> _completer =
-      Completer<Result<RingFrame>>();
+  final Completer<Result<RingFrame, BleFailure>> _completer =
+      Completer<Result<RingFrame, BleFailure>>();
 
-  Future<Result<RingFrame>> get future => _completer.future;
+  Future<Result<RingFrame, BleFailure>> get future => _completer.future;
 
-  void complete(Result<RingFrame> result) {
+  void complete(Result<RingFrame, BleFailure> result) {
     if (!_completer.isCompleted) {
       _completer.complete(result);
     }

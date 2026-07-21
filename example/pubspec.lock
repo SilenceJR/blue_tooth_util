@@ -80,6 +80,13 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "1.19.1"
+  common:
+    dependency: transitive
+    description:
+      path: "../../common"
+      relative: true
+    source: path
+    version: "1.0.0"
   crypto:
     dependency: transitive
     description:

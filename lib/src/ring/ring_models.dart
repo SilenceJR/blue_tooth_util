@@ -1,6 +1,8 @@
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:common/common.dart';
+
 import '../common/ble_failure.dart';
 import '../common/hex_utils.dart';
 import '../common/result.dart';
@@ -199,14 +201,14 @@ class RingAdvertisement {
   /// 从扫描结果解析智能戒指厂商数据。
   ///
   /// [device] 为 SDK 扫描结果；若没有符合 `0x4A59` 结构的厂商数据返回失败。
-  static Result<RingAdvertisement> fromScanDevice(BleScanDevice device) {
+  static Result<RingAdvertisement, BleFailure> fromScanDevice(BleScanDevice device) {
     for (final data in device.manufacturerData) {
       final result = fromManufacturerData(data);
-      if (result case Success<RingAdvertisement>()) {
+      if (result case Ok<RingAdvertisement, BleFailure>()) {
         return result;
       }
     }
-    return const Result.failure(
+    return const Result.err(
       BleFailure(
         code: BleFailureCode.protocolError,
         message: 'Ring manufacturer data was not found',
@@ -219,7 +221,7 @@ class RingAdvertisement {
   /// Android/iOS/Web 对厂商数据的拆分可能不同：有的平台会把前 2 字节作为
   /// [BleManufacturerData.companyId] 并从 [BleManufacturerData.payload] 中移除；
   /// 有的平台会把 `59 4A` 保留在 payload 开头。这里同时兼容两种格式。
-  static Result<RingAdvertisement> fromManufacturerData(
+  static Result<RingAdvertisement, BleFailure> fromManufacturerData(
     BleManufacturerData data,
   ) {
     final payload = data.payload;
@@ -233,7 +235,7 @@ class RingAdvertisement {
       identifier = data.companyId;
       body = payload;
     } else {
-      return const Result.failure(
+      return const Result.err(
         BleFailure(
           code: BleFailureCode.protocolError,
           message: 'Manufacturer data is not a ring advertisement',
@@ -242,7 +244,7 @@ class RingAdvertisement {
     }
 
     if (body.length < 15) {
-      return const Result.failure(
+      return const Result.err(
         BleFailure(
           code: BleFailureCode.protocolError,
           message: 'Ring manufacturer payload is too short',
@@ -250,7 +252,7 @@ class RingAdvertisement {
       );
     }
 
-    return Result.success(
+    return Result.ok(
       RingAdvertisement(
         companyId: data.companyId,
         identifier: identifier,
@@ -294,7 +296,7 @@ class RingAdvertisement {
 /// 智能戒指扫描结果扩展。
 extension RingScanDeviceExtension on BleScanDevice {
   /// 解析当前扫描结果中的智能戒指厂商数据。
-  Result<RingAdvertisement> parseRingAdvertisement() {
+  Result<RingAdvertisement, BleFailure> parseRingAdvertisement() {
     return RingAdvertisement.fromScanDevice(this);
   }
 }
@@ -507,7 +509,7 @@ class RingPrayerReminder {
   );
 
   /// 校验提醒字段是否符合协议范围。
-  Result<void> validate() {
+  Result<void, BleFailure> validate() {
     // if (start < 0 || start > 22 || end < 0 || end > 24) {
     //   return const Result.failure(
     //     BleFailure(
@@ -524,7 +526,7 @@ class RingPrayerReminder {
     //     ),
     //   );
     // }
-    return const Result.success(null);
+    return const Result.ok(null);
   }
 
   /// 编码为协议中的 4 字节提醒项。
