@@ -3,7 +3,6 @@ import 'dart:typed_data';
 import 'package:common/common.dart';
 
 import '../common/ble_failure.dart';
-import '../common/result.dart';
 
 /// 智能戒指协议命令字。
 enum RingCommand {

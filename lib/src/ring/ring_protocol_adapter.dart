@@ -1,7 +1,6 @@
 import 'package:blue_tooth_util/src/common/ble_failure.dart';
 import 'package:common/common.dart';
 
-import '../common/result.dart';
 import '../core/ble_protocol_adapter.dart';
 import '../core/ble_scan_device.dart';
 import '../core/ble_transport.dart';

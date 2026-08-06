@@ -1,4 +1,3 @@
-import 'ble_failure.dart';
 
 /// SDK 公开接口的统一返回类型。
 ///

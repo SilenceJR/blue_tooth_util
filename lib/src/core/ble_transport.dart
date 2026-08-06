@@ -4,7 +4,6 @@ import 'dart:typed_data';
 import 'package:common/common.dart';
 
 import '../common/ble_failure.dart';
-import '../common/result.dart';
 import 'ble_scan_device.dart';
 
 /// 蓝牙适配器状态。

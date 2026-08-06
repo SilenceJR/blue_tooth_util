@@ -5,7 +5,6 @@ import 'package:common/common.dart';
 import 'package:universal_ble/universal_ble.dart' as universal;
 
 import '../common/ble_failure.dart';
-import '../common/result.dart';
 import 'ble_scan_device.dart';
 import 'ble_transport.dart';
 

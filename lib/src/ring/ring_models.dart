@@ -1,11 +1,9 @@
-import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:common/common.dart';
 
 import '../common/ble_failure.dart';
 import '../common/hex_utils.dart';
-import '../common/result.dart';
 import '../core/ble_scan_device.dart';
 import 'ring_protocol.dart';
 
