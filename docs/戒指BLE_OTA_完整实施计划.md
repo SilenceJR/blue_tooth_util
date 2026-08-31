@@ -178,3 +178,12 @@ App 的详细改动见《APP_CODEX_戒指OTA实施交接》。服务端需提供
 - 服务端固件清单和签名合同。
 - App OTA Coordinator 对 `BlueToothServer` 会话所有权的调整。
 - 需要原生 Android 前台服务时的后台升级方案。首版默认前台保证、后台可恢复，不新增前台服务。
+- `blue_tooth_util` 公开接口大改，必须先给出方案、影响范围和回退方式并等待确认。
+
+## 9. Codex 和分支执行
+
+BLE 包与 Sublinur App 是两个独立 Git 仓库，不能由一个分支统一承载修改。采用分仓实现、统一门禁审查：BLE 基于 `main` 使用 `codex/ring-ota-ble-core`，App 基于 `dev_347` 使用 `codex/ring-ota-app`，各自在独立 worktree 中执行。
+
+模型分工、阶段依赖、仓库元数据前置问题和可复制提示词见《戒指BLE_OTA_Codex协作执行方案》。BLE 公共 API 和验证 commit 完成前，App 不得编写推测性兼容层。
+
+仓库元数据提交 `7c13ecbc6586b631295ed79022d4b74fe8949672` 已快进合入 `dev_347`。App OTA 持久 worktree 已创建并能初始化固定版本的 BLE submodule；开始 App 实现前仍需将 gitlink 更新到 BLE OTA 分支交付的已验证 commit。

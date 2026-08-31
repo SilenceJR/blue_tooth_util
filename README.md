@@ -16,6 +16,7 @@ Sublinur 的 BLE 协议包。包内负责扫描、连接、GATT 传输、协议�
 - [戒指 BLE OTA App 对接文档](docs/戒指BLE_OTA_App对接文档.md)
 - [戒指 BLE OTA 完整实施计划](docs/戒指BLE_OTA_完整实施计划.md)
 - [App Codex 戒指 OTA 实施交接](docs/APP_CODEX_戒指OTA实施交接.md)
+- [戒指 BLE OTA Codex 协作执行方案](docs/戒指BLE_OTA_Codex协作执行方案.md)
 
 文档中的“协议已定义”“固件已实现”和“真机已验证”是不同状态。OTA 功能在 Android 与 iPhone 真机完成成功、断连和恢复测试前，不得标记为可量产。
 
