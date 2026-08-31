@@ -1,7 +1,7 @@
 # 戒指 BLE OTA Codex 协作执行方案
 
 > 记录日期：2026-08-31
-> 状态：BLE B0 至 B5 已完成；Android/iOS 构建与真机证据继续按 B6 独立提交执行
+> 状态：BLE B0 至 B6 代码与构建集成已完成；Android 容器启动已有证据，iPhone 签名和双平台真实 OTA 仍为跨仓联调门禁
 
 ## 1. 目录和仓库边界
 
@@ -150,6 +150,8 @@ BLE 配置同样将 spawned-agent threads 上限设置为 2，但执行规则仍
 4. 单独提交 `RingOtaProtocolAdapter`、`RingOtaSession` 和单层迭代状态机。
 5. 单独提交断连、重试、恢复、进度限流和最终版本确认。
 6. 单独提交 Android/iOS 构建集成结果和 Android/iPhone 真机联调证据；没有设备证据时明确标记未验证，不用构建结果替代。
+
+B6 实际完成 Android APK、iOS Simulator 和 iPhoneOS no-codesign 构建，并在 Pixel 8 Pro 启动 Example。iPhone 可见但受本机签名账户/描述文件阻断；没有目标戒指和受控 `.rota`，未执行真实 OTA。App 集成任务只能依赖 B5 已验证的公开 API，仍须自行完成 Android/iPhone 的业务扫描、MTU、WNR、断连恢复和最终版本确认验收。
 
 每个功能阶段串行执行：只读协议或调用链分析、主任务实现、测试代理补充测试、主任务复核 diff、只读 Reviewer 审查、提交。每阶段报告公开 API、commit ID、测试、构建、真机边界、文档状态和 App 可依赖内容。
 

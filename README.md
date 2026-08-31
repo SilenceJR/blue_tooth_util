@@ -48,3 +48,9 @@ OTA B4 单轮正常路径已实现：调用方用绑定目标身份的 `RingOtaP
 OTA B5 恢复与最终确认已实现：`RingOtaSession` 对控制命令超时只重发一次，对 `68 87` 从未确认 burst 边界最多重发三次，并只按设备 ACK 字节以 250 ms 或 1% 门槛发布纯进度。`RingOtaUpdateSession` 用最多三轮的迭代流程精确重扫目标 OTA 设备、重新连接并从 START_OTA 整包恢复；只有精确业务 Manufacturer Data 目标重连且 `0x0402.fw_version` 等于包版本时，才返回 `RingOtaUpdateResult`。格式、参数、地址、分包、安全和未知设备错误不自动重试。
 
 BLE、MTU、无响应写和 OTA 恢复必须在 Android 与 iPhone 真机验证；模拟器构建只证明编译和原生依赖集成通过。
+
+## B6 构建与设备边界
+
+在 B5 commit `14ab90e` 上重新验证：根包 72 项测试通过；Example widget test 通过；Android debug APK、iOS Simulator debug 和 iPhoneOS debug no-codesign 构建通过。Pixel 8 Pro（Android 17）已安装并以前台 Activity 启动 Example。iOS 15.8.5 iPhone 可被 Flutter 发现，但本机没有对应 Apple Developer 账户和 Provisioning Profile，签名安装失败。
+
+上述证据不包含目标戒指、受控 `.rota`、真实 Manufacturer Data、MTU、无响应写、断连恢复或最终 `0x0402` 验证。Example 当前也没有 OTA 操作入口；因此 B6 只完成构建集成和 Android 容器启动，Android/iPhone 完整 OTA 真机联合验收仍是 App/固件联调门禁。

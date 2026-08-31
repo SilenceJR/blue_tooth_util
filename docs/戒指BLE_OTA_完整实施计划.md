@@ -2,7 +2,7 @@
 
 > 记录日期：2026-08-31  
 > 协议基线：《戒指BLE_OTA_App对接文档》v1.2.1  
-> 状态：B0 至 B5 已完成，包含仓库配置、BLE 回归、应用模式命令、`.rota v1` 门禁、单轮传输、跨连接恢复和最终版本确认；真机构建联调属于 B6
+> 状态：B0 至 B6 的 BLE 代码与构建集成已完成；Android Example 启动通过，iPhone 签名安装及双平台真实戒指 OTA 联调仍受外部设备、制品和签名条件阻断
 
 ## 1. 目标与边界
 
@@ -119,6 +119,20 @@ BLE 包 B5 根包阶段性测试总数为 72 项，其中 OTA Session 与跨连�
 BLE 业务层只依赖 `BleTransport` 返回的实际 MTU 和顺序 `await write()`，不复制 CoreBluetooth 或 Android GATT 回调。Apple central 模式的高吞吐无响应写仍需 iPhone 真机验证，不能仅凭插件版本或模拟器构建判定流控通过。
 
 `universal_ble 2.2.0` 的 Apple 实现没有向本包公开写前 `canSendWriteWithoutResponse` 检查。B4 只依赖其顺序 Future，不在 Session 内加入延时兼容层；iPhone 真机若出现首包或队列超时，必须先提出 Transport/插件修正方案再改动原生边界。
+
+### 3.5 B6 构建与设备证据
+
+在 BLE commit `14ab90e` 上取得以下新鲜证据：
+
+- 根包 `flutter test`：72 项通过；全仓 `flutter analyze` 仍只有 6 条阶段前既有问题。
+- Example `flutter test`：1 项通过；Example analyze 仍为既有的 `common` 直接依赖提示和未使用局部变量两项。
+- `flutter build apk --debug --no-pub`：通过。
+- `flutter build ios --simulator --debug --no-pub`：通过。
+- `flutter build ios --debug --no-codesign --no-pub`：通过。
+- Pixel 8 Pro / Android 17：debug APK 安装成功，`MainActivity` 前台运行。
+- iPhone / iOS 15.8.5：设备可发现，签名构建因本机没有 Apple Developer 账户和对应 Provisioning Profile 失败，未安装启动。
+
+当前 Flutter 工具链要求 Example iOS 最低目标 15.0；B6 保留该迁移和 CocoaPods workspace/lock，使 clean checkout 能复现本次构建。Example 没有 OTA 操作入口，本阶段也没有受控 `.rota`、目标戒指或密钥，所以没有发送 `0x0401`/START_OTA。真实 Manufacturer Data、实际 MTU、无响应写流控、成功升级、`68 87`、断连恢复和重启后的 `0x0402` 均未执行，不能标记为真机 OTA 通过或生产可用。
 
 ## 4. 分发和安全
 

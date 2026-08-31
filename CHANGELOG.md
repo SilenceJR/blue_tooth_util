@@ -14,4 +14,6 @@
 - 增加 `RingOtaUpdateSession`、更新快照和最终结果，按目标 Manufacturer Data 在 OTA/业务模式间精确重扫。
 - 控制命令超时同链重发一次，`68 87` 从当前 burst 边界最多重发三次；可恢复错误最多执行三轮 START_OTA。
 - 进度只按设备确认字节以 250 ms 或 1% 门槛发布；只有业务模式 `0x0402` 版本匹配才返回最终成功。
+- 更新 Example iOS 构建配置到当前 Flutter 要求的 iOS 15.0，并记录 CocoaPods workspace/lock 以复现 Simulator 与 iPhoneOS 构建。
+- B6 重新通过 Android debug APK、iOS Simulator 和 iPhoneOS no-codesign 构建；Pixel 8 Pro 已启动 Example，iPhone 签名安装仍受本机账户和描述文件阻断。
 - Android 与 iPhone 真机的扫描、MTU、断连重连及无响应写仍需设备验证。
