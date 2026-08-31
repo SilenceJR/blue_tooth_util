@@ -119,24 +119,24 @@ abstract class BleTransport {
   Stream<Uint8List> valueStream(String deviceId, String characteristicId);
 
   /// 请求运行时蓝牙权限。
-  Future<Result<void,BleFailure>> requestPermissions();
+  Future<Result<void, BleFailure>> requestPermissions();
 
   /// 获取当前蓝牙可用状态。
-  Future<Result<BleAvailability,BleFailure>> getAvailability();
+  Future<Result<BleAvailability, BleFailure>> getAvailability();
 
   /// 开始扫描。
   ///
   /// [options] 描述扫描过滤条件。
-  Future<Result<void,BleFailure>> startScan(BleScanOptions options);
+  Future<Result<void, BleFailure>> startScan(BleScanOptions options);
 
   /// 停止扫描。
-  Future<Result<void,BleFailure>> stopScan();
+  Future<Result<void, BleFailure>> stopScan();
 
   /// 连接设备。
   ///
   /// [deviceId] 为平台设备标识；[timeout] 为连接超时；
   /// [autoConnect] 是否交给系统自动重连，具体支持情况取决于平台。
-  Future<Result<void,BleFailure>> connect(
+  Future<Result<void, BleFailure>> connect(
     String deviceId, {
     Duration timeout = const Duration(seconds: 20),
     bool autoConnect = false,
@@ -145,20 +145,24 @@ abstract class BleTransport {
   /// 断开设备连接。
   ///
   /// [deviceId] 为平台设备标识。
-  Future<Result<void,BleFailure>> disconnect(String deviceId);
+  Future<Result<void, BleFailure>> disconnect(String deviceId);
 
   /// 请求或查询 MTU。
   ///
-  /// [expectedMtu] 为期望 MTU，实际结果由系统和设备协商决定。
-  Future<Result<int,BleFailure>> requestMtu(String deviceId, int expectedMtu);
+  /// [expectedMtu] 为期望 MTU，返回值为平台和设备协商后的实际值。
+  /// Android 会发起 MTU 请求；Apple 不提供主动请求能力，返回系统管理的
+  /// 最大无响应写长度加 ATT 头长度。
+  Future<Result<int, BleFailure>> requestMtu(String deviceId, int expectedMtu);
 
   /// 发现设备 GATT 服务和特征值。
-  Future<Result<List<BleDiscoveredService>,BleFailure>> discoverServices(String deviceId);
+  Future<Result<List<BleDiscoveredService>, BleFailure>> discoverServices(
+    String deviceId,
+  );
 
   /// 订阅特征值通知。
   ///
   /// [serviceId] 为服务 UUID；[characteristicId] 为 Notify 特征 UUID。
-  Future<Result<void,BleFailure>> subscribeNotifications(
+  Future<Result<void, BleFailure>> subscribeNotifications(
     String deviceId,
     String serviceId,
     String characteristicId,
@@ -167,7 +171,7 @@ abstract class BleTransport {
   /// 写入特征值。
   ///
   /// [value] 为待写入字节；[withoutResponse] 为 true 时使用无响应写。
-  Future<Result<void,BleFailure>> write(
+  Future<Result<void, BleFailure>> write(
     String deviceId,
     String serviceId,
     String characteristicId,

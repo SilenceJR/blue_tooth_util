@@ -2,7 +2,7 @@
 
 > 记录日期：2026-08-31  
 > 协议基线：《戒指BLE_OTA_App对接文档》v1.2.1  
-> 状态：文档与方案已整理，代码尚未实施，设备真机尚未验证
+> 状态：B0 仓库配置和 B1 BLE 依赖回归已完成；OTA 协议代码尚未实施，设备真机尚未验证
 
 ## 1. 目标与边界
 
@@ -103,11 +103,11 @@
 
 ### 3.4 `universal_ble`
 
-计划在同一 OTA 批次升级到 `>=2.2.0 <2.3.0`。
+BLE 包已将依赖升级并锁定到 `universal_ble 2.2.0`，约束为 `>=2.2.0 <2.3.0`。本阶段没有增加 OTA 协议代码，也没有让 Adapter、Session 或模型直接导入平台插件。
 
-已在临时副本验证 BLE 包测试、BLE Example iOS Simulator 构建和完整 App iOS Simulator 构建，没有复现 2.1.0 的原生 Swift 文件缺失问题。Android 和 iPhone 真机仍是上线前置条件。
+BLE 包 19 个测试、BLE Example widget test、Example iOS Simulator debug 构建和 Android debug APK 构建已通过。完整 App 编译、Android 真机和 iPhone 真机仍是后续验收项。
 
-Apple 无响应写流控由 `universal_ble 2.2.0` 处理。BLE 业务层只依赖 `BleTransport` 返回的实际 MTU 和顺序 `await write()`，不复制 CoreBluetooth 或 Android GATT 回调。
+BLE 业务层只依赖 `BleTransport` 返回的实际 MTU 和顺序 `await write()`，不复制 CoreBluetooth 或 Android GATT 回调。Apple central 模式的高吞吐无响应写仍需 iPhone 真机验证，不能仅凭插件版本或模拟器构建判定流控通过。
 
 ## 4. 分发和安全
 

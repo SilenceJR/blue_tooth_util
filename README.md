@@ -37,4 +37,6 @@ flutter analyze
 flutter test
 ```
 
+依赖基线为 `universal_ble >=2.2.0 <2.3.0`。自动化回归覆盖扫描参数和广播映射、权限与可用状态、实际 MTU、服务能力、Notify、带响应写、无响应写顺序和断开调用。
+
 BLE、MTU、无响应写和 OTA 恢复必须在 Android 与 iPhone 真机验证；模拟器构建只证明编译和原生依赖集成通过。

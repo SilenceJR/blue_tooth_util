@@ -1,4 +1,9 @@
+import 'dart:async';
+import 'dart:typed_data';
 
+import 'package:blue_tooth_util/blue_tooth_util.dart';
+// ignore: depend_on_referenced_packages
+import 'package:common/common.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
@@ -17,7 +22,7 @@ void main() {
   testWidgets('BLE debug page renders', (WidgetTester tester) async {
     Get.put(
       BleDebugController(
-        // sdk: BlueToothSdk(transport: _FakeBleTransport()),
+        sdk: BlueToothSdk(transport: _FakeBleTransport()),
         cache: _FakeBleDebugCache(),
       ),
     );
@@ -65,92 +70,102 @@ class _FakeBleDebugCache implements BleDebugCache {
   }
 }
 
-// class _FakeBleTransport implements BleTransport {
-//   final _scan = StreamController<BleScanDevice>.broadcast();
-//   final _availability = StreamController<BleAvailability>.broadcast();
-//   final _connection = StreamController<bool>.broadcast();
-//   final _values = StreamController<Uint8List>.broadcast();
-//
-//   @override
-//   Stream<BleAvailability> get availabilityStream => _availability.stream;
-//
-//   @override
-//   Stream<BleScanDevice> get scanStream => _scan.stream;
-//
-//   @override
-//   Stream<bool> connectionStream(String deviceId) => _connection.stream;
-//
-//   @override
-//   Stream<Uint8List> valueStream(String deviceId, String characteristicId) {
-//     return _values.stream;
-//   }
-//
-//   // @override
-//   // Future<Result<void>> connect(
-//   //   String deviceId, {
-//   //   Duration timeout = const Duration(seconds: 20),
-//   //   bool autoConnect = false,
-//   // }) async {
-//   //   return const Result.success(null);
-//   // }
-//   //
-//   // @override
-//   // Future<Result<void>> disconnect(String deviceId) async {
-//   //   return const Result.success(null);
-//   // }
-//   //
-//   // @override
-//   // void dispose() {}
-//   //
-//   // @override
-//   // Future<Result<List<BleDiscoveredService>>> discoverServices(
-//   //   String deviceId,
-//   // ) async {
-//   //   return const Result.success([]);
-//   // }
-//   //
-//   // @override
-//   // Future<Result<BleAvailability>> getAvailability() async {
-//   //   return const Result.success(BleAvailability.poweredOn);
-//   // }
-//   //
-//   // @override
-//   // Future<Result<void>> requestPermissions() async {
-//   //   return const Result.success(null);
-//   // }
-//   //
-//   // @override
-//   // Future<Result<int>> requestMtu(String deviceId, int expectedMtu) async {
-//   //   return Result.success(expectedMtu);
-//   // }
-//   //
-//   // @override
-//   // Future<Result<void>> startScan(BleScanOptions options) async {
-//   //   return const Result.success(null);
-//   // }
-//   //
-//   // @override
-//   // Future<Result<void>> stopScan() async {
-//   //   return const Result.success(null);
-//   // }
-//   //
-//   // @override
-//   // Future<Result<void>> subscribeNotifications(
-//   //   String deviceId,
-//   //   String serviceId,
-//   //   String characteristicId,
-//   // ) async {
-//   //   return const Result.success(null);
-//   // }
-//   //
-//   // @override
-//   // Future<Result<void>> write(
-//   //   String deviceId,
-//   //   String serviceId,
-//   //   String characteristicId,
-//   //   Uint8List value, {
-//   //   bool withoutResponse = false,
-//   // }) async {
-//   //   return const Result.success(null);
-//   // }
-// }
+class _FakeBleTransport implements BleTransport {
+  final _scanController = StreamController<BleScanDevice>.broadcast();
+  final _availabilityController = StreamController<BleAvailability>.broadcast();
+  final _connectionController = StreamController<bool>.broadcast();
+  final _valueController = StreamController<Uint8List>.broadcast();
+
+  @override
+  Stream<BleScanDevice> get scanStream => _scanController.stream;
+
+  @override
+  Stream<BleAvailability> get availabilityStream =>
+      _availabilityController.stream;
+
+  @override
+  Stream<bool> connectionStream(String deviceId) =>
+      _connectionController.stream;
+
+  @override
+  Stream<Uint8List> valueStream(String deviceId, String characteristicId) {
+    return _valueController.stream;
+  }
+
+  @override
+  Future<Result<void, BleFailure>> requestPermissions() async {
+    return const Result.ok(null);
+  }
+
+  @override
+  Future<Result<BleAvailability, BleFailure>> getAvailability() async {
+    return const Result.ok(BleAvailability.poweredOn);
+  }
+
+  @override
+  Future<Result<void, BleFailure>> startScan(BleScanOptions options) async {
+    return const Result.ok(null);
+  }
+
+  @override
+  Future<Result<void, BleFailure>> stopScan() async {
+    return const Result.ok(null);
+  }
+
+  @override
+  Future<Result<void, BleFailure>> connect(
+    String deviceId, {
+    Duration timeout = const Duration(seconds: 20),
+    bool autoConnect = false,
+  }) async {
+    return const Result.ok(null);
+  }
+
+  @override
+  Future<Result<void, BleFailure>> disconnect(String deviceId) async {
+    return const Result.ok(null);
+  }
+
+  @override
+  Future<Result<int, BleFailure>> requestMtu(
+    String deviceId,
+    int expectedMtu,
+  ) async {
+    return Result.ok(expectedMtu);
+  }
+
+  @override
+  Future<Result<List<BleDiscoveredService>, BleFailure>> discoverServices(
+    String deviceId,
+  ) async {
+    return const Result.ok([]);
+  }
+
+  @override
+  Future<Result<void, BleFailure>> subscribeNotifications(
+    String deviceId,
+    String serviceId,
+    String characteristicId,
+  ) async {
+    return const Result.ok(null);
+  }
+
+  @override
+  Future<Result<void, BleFailure>> write(
+    String deviceId,
+    String serviceId,
+    String characteristicId,
+    Uint8List value, {
+    bool withoutResponse = false,
+  }) async {
+    return const Result.ok(null);
+  }
+
+  @override
+  void dispose() {
+    unawaited(_scanController.close());
+    unawaited(_availabilityController.close());
+    unawaited(_connectionController.close());
+    unawaited(_valueController.close());
+  }
+}
