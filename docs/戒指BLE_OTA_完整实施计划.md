@@ -2,7 +2,7 @@
 
 > 记录日期：2026-08-31  
 > 协议基线：《戒指BLE_OTA_App对接文档》v1.2.1  
-> 状态：B0 至 B4 已完成，包含仓库配置、BLE 回归、应用模式命令、`.rota v1` 门禁和 OTA 单轮正常传输；恢复、最终版本确认和真机验证尚未完成
+> 状态：B0 至 B5 已完成，包含仓库配置、BLE 回归、应用模式命令、`.rota v1` 门禁、单轮传输、跨连接恢复和最终版本确认；真机构建联调属于 B6
 
 ## 1. 目标与边界
 
@@ -61,7 +61,8 @@
 - `RingDeviceIdentity`：MAC 标准化、派生和广播字节序。B2 已实现。
 - `RingOtaPackage`、`RingOtaPartition`、`RingOtaPackageParser`：升级包解析和拒绝规则。B3 已实现。
 - `RingOtaProtocolAdapter`、`RingOtaSession`：OTA 模式匹配、初始化和传输。B4 已实现单轮正常路径。
-- `RingOtaTransferSnapshot`、`RingOtaTransferResult`：协议确认边界状态和 Bootloader 传输结果。B4 已实现；B5 再增加进度限流和最终业务版本确认。
+- `RingOtaTransferSnapshot`、`RingOtaTransferResult`：协议确认边界状态和 Bootloader 传输结果。B4 已实现，B5 已增加 ACK 进度限流。
+- `RingOtaUpdateSession`、`RingOtaUpdateSnapshot`、`RingOtaUpdateResult`：B5 已实现跨连接恢复和业务模式最终版本确认。
 
 `RingBleSession.queryOtaInfo()` 和 `enterOtaMode()` 已在 B2 实现。后者只等待设备主动断链并返回 `RingOtaEntryState`，不负责主动断开、重新扫描或 OTA 传输。
 
@@ -95,7 +96,7 @@ B3 只拒绝规范化后的物理 Flash 区间重叠；协议没有规定 SRAM `
 7. 收到 OTA_COMPLETE 后发送 REBOOT。
 8. 重新连接业务模式并用 `0x0402` 验证目标版本。
 
-B4 已实现步骤 4 至 7 的单轮正常路径，使用 `burst_size = 8` 默认值、严格顺序 `await write()` 和延迟 REBOOT `04 01 → 00 8A → 主动断开`。`OTA_COMPLETE` 与 `RingOtaTransferResult` 均不代表最终升级成功。B4 对设备错误和超时直接返回失败，不做递归或隐式重试；步骤 8、断连恢复和以下重试规则由 B5 实现。
+B4 已实现步骤 4 至 7 的单轮正常路径，使用 `burst_size = 8` 默认值、严格顺序 `await write()` 和延迟 REBOOT `04 01 → 00 8A → 主动断开`。`OTA_COMPLETE` 与 `RingOtaTransferResult` 均不代表最终升级成功。B5 在不改变该单轮结果语义的前提下实现步骤 8、断连恢复和以下重试规则。
 
 重试规则：
 
@@ -105,11 +106,15 @@ B4 已实现步骤 4 至 7 的单轮正常路径，使用 `burst_size = 8` 默�
 - 格式、产品、签名和安全能力错误不重试。
 - 进度按设备确认字节计算，每 250 ms 或增加 1% 才通知上层。
 
+B5 的自动整轮重试仅覆盖连接/写入/超时、`0x17`、`0x64`、`0x66` 和耗尽 burst 重发的 `0x68`。`0x05`、`0x06`、`0x0C`、`0x10`、`0x65`、`0x6A` 及未知错误直接失败。每一轮都创建新 Session，并从 START_OTA 和第一个分区开始；三轮是包含首次在内的总上限，不保存分区断点。最终扫描同时识别精确 OTA 和业务身份：再次出现 OTA 身份会在剩余轮次内恢复，业务身份则必须由 `0x0402` 返回目标版本才能完成。
+
+控制命令超时重发没有协议序号。若重发后可能存在的同码重复 ACK 已在后续不同应答等待期间被消费，会话继续；若到下一条同码控制命令前仍无法证明旧 ACK 已排空，会话不会猜测 ACK 代际，而是要求新连接并从 START_OTA 整轮恢复。
+
 ### 3.4 `universal_ble`
 
 BLE 包已将依赖升级并锁定到 `universal_ble 2.2.0`，约束为 `>=2.2.0 <2.3.0`。B2 在业务协议层增加 `0x0402`、`0x0401`、OTA 信息和身份模型；Adapter、Session 和模型仍不直接导入平台插件。
 
-BLE 包 B4 OTA Session 定向测试共 14 项通过；根包阶段性测试总数为 60 项。测试覆盖身份 Adapter、命令字节、MTU/GATT 初始化、并发初始化、burst/尾包、多分区、连续 Notify 缓冲、延迟重启、错序、取消、重连门禁和资源释放，全部使用 fake transport 与合成包。BLE Example widget test、Example iOS Simulator debug 构建和 Android debug APK 构建沿用 B1 证据。完整 App 编译、Android 真机和 iPhone 真机仍是后续验收项。
+BLE 包 B5 根包阶段性测试总数为 72 项，其中 OTA Session 与跨连接 Update Session 定向测试 26 项。测试覆盖身份 Adapter、命令字节、MTU/GATT 初始化、burst 与尾包重发、控制超时及迟到/同码 ACK 消歧、多分区、连续 Notify 缓冲、最多三轮 START 恢复、不可重试错误、精确业务身份、最终 `0x0402` 版本门禁、取消、互斥和资源释放，全部使用 fake transport 与合成包。BLE Example widget test、Example iOS Simulator debug 构建和 Android debug APK 构建沿用 B1 证据。完整 App 编译、Android 真机和 iPhone 真机仍是后续验收项。
 
 BLE 业务层只依赖 `BleTransport` 返回的实际 MTU 和顺序 `await write()`，不复制 CoreBluetooth 或 Android GATT 回调。Apple central 模式的高吞吐无响应写仍需 iPhone 真机验证，不能仅凭插件版本或模拟器构建判定流控通过。
 

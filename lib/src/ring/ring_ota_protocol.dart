@@ -19,6 +19,8 @@ class RingOtaProtocol {
   static const requestedMtu = 247;
   static const maximumMtu = 240;
   static const defaultBurstSize = 8;
+  static const maxBurstRetransmissions = 3;
+  static const maxControlAttempts = 2;
 
   static const responseStart = 0x81;
   static const responseOtaComplete = 0x83;

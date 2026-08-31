@@ -11,4 +11,7 @@
 - 增加绑定目标身份的 `RingOtaProtocolAdapter`、OTA GATT 协议、`RingOtaSession` 和单轮迭代传输状态。
 - 单轮流程使用延迟 REBOOT `04 01`/`00 8A` 后主动断开；传输结果明确仍需业务模式版本确认。
 - 初始化失败会释放会话并断开；取消使用稳定的 `BleFailureCode.cancelled`，不递归重试。
+- 增加 `RingOtaUpdateSession`、更新快照和最终结果，按目标 Manufacturer Data 在 OTA/业务模式间精确重扫。
+- 控制命令超时同链重发一次，`68 87` 从当前 burst 边界最多重发三次；可恢复错误最多执行三轮 START_OTA。
+- 进度只按设备确认字节以 250 ms 或 1% 门槛发布；只有业务模式 `0x0402` 版本匹配才返回最终成功。
 - Android 与 iPhone 真机的扫描、MTU、断连重连及无响应写仍需设备验证。

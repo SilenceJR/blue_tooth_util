@@ -25,7 +25,7 @@ App Codex 开始修改前必须重新读取：
 
 - `RingFirmwareRepository`：固件清单、下载、SHA-256 和签名验证。
 - `BlueToothServer`：业务会话交接、已绑定设备和 OTA 独占锁。
-- `blue_tooth_util`：包解析、OTA Session 和进度事件。
+- `blue_tooth_util`：包解析、`RingOtaUpdateSession`、ACK 限流进度、跨连接恢复和 `0x0402` 最终确认。
 - 原子持久化存储：升级意图和已验证包信息。
 
 `BlueToothServer` 保留普通 BLE 所有权，但需提供窄接口：
@@ -37,7 +37,7 @@ App Codex 开始修改前必须重新读取：
 
 ### 2.2 会话类型
 
-移除连接成功后对 `RingBleSession` 的无条件强制转换。显式区分业务会话和 `RingOtaSession`，不使用异常捕获维持兼容。
+移除连接成功后对 `RingBleSession` 的无条件强制转换。显式区分业务会话和 OTA 更新任务，不使用异常捕获维持兼容。App 在释放业务会话后，通过 `BlueToothSdk.createRingOtaUpdateSession(identity: ...)` 创建 BLE 更新会话；不要自行复制 OTA 扫描、重试或版本确认状态机。
 
 同一时间只允许一个 OTA。新的升级请求应复用当前任务或返回“升级进行中”，不得创建嵌套状态机。
 
@@ -79,7 +79,7 @@ iOS 的 `deviceId` 是系统标识，不能用于关联业务模式和 OTA 模�
 - 设备详情页显示持久升级卡片。
 - 用户确认后进入独立升级页。
 - 升级页显示准备、下载、校验、切换模式、传输、重启和确认结果。
-- 进度更新由 Coordinator 限流，页面不监听每个数据包。
+- BLE 包只在 ACK 增加至少 1% 或距上次纯进度通知至少 250 ms 时发布进度；Coordinator 只转发/持久化必要快照，页面不监听数据包。
 - START_OTA 前允许取消。
 - 开始写入后不显示普通取消按钮；返回和关闭 App 前显示单层风险提示。
 - 升级页保持亮屏。

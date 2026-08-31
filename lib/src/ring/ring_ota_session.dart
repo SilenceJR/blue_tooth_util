@@ -38,6 +38,10 @@ class RingOtaSession implements BleSession {
   bool _requiresReconnect = false;
   bool _allowBufferedTerminal = false;
   int? _actualMtu;
+  int? _possibleDuplicateControlResponse;
+  RingOtaTransferPhase? _lastSnapshotPhase;
+  int _lastSnapshotBytes = 0;
+  DateTime? _lastSnapshotAt;
 
   @override
   String get deviceId => _device.deviceId;
@@ -163,6 +167,9 @@ class RingOtaSession implements BleSession {
 
     _transferBusy = true;
     _cancelRequested = false;
+    _lastSnapshotPhase = null;
+    _lastSnapshotBytes = 0;
+    _lastSnapshotAt = null;
     var acknowledgedBytes = 0;
     try {
       _emit(package, RingOtaTransferPhase.starting, acknowledgedBytes);
@@ -221,34 +228,45 @@ class RingOtaSession implements BleSession {
           final expected = isFullBurst
               ? RingOtaProtocol.responseBlockBurst
               : terminalCode;
-          final wait = _registerResponseWait(
-            expected,
-            timeout: isFullBurst
-                ? const Duration(seconds: 6)
-                : const Duration(seconds: 6),
-          );
           _emit(
             package,
             RingOtaTransferPhase.transferringPartition,
             acknowledgedBytes,
             partition.index,
           );
-          for (final packet in packets) {
-            _checkActive();
-            final writeResult = await _transport.write(
-              deviceId,
-              RingOtaProtocol.serviceUuid,
-              RingOtaProtocol.dataCharacteristicUuid,
-              packet,
-              withoutResponse: true,
+          var retransmissions = 0;
+          while (true) {
+            final wait = _registerResponseWait(
+              expected,
+              timeout: const Duration(seconds: 6),
             );
-            if (writeResult case Err(:final error)) {
-              _failResponseWait(error);
-              _abort(error);
+            for (final packet in packets) {
+              _checkActive();
+              final writeResult = await _transport.write(
+                deviceId,
+                RingOtaProtocol.serviceUuid,
+                RingOtaProtocol.dataCharacteristicUuid,
+                packet,
+                withoutResponse: true,
+              );
+              if (writeResult case Err(:final error)) {
+                _failResponseWait(error);
+                _abort(error);
+              }
+              _checkActive();
             }
-            _checkActive();
+            try {
+              await _awaitRegistered(wait);
+              break;
+            } on _RingOtaAbort catch (abort) {
+              if (_isBurstRetry(abort.failure) &&
+                  retransmissions < RingOtaProtocol.maxBurstRetransmissions) {
+                retransmissions++;
+                continue;
+              }
+              rethrow;
+            }
           }
-          await _awaitRegistered(wait);
           if (isFullBurst && !endsPartition) {
             await Future<void>.delayed(Duration.zero);
             _checkActive();
@@ -351,30 +369,60 @@ class RingOtaSession implements BleSession {
   }
 
   Future<void> _sendControl(Uint8List command, int expectedResponse) async {
-    _checkActive();
-    if (_responseQueue.isNotEmpty || _pendingResponse != null) {
+    if (_possibleDuplicateControlResponse == expectedResponse) {
+      _requiresReconnect = true;
       _abort(
-        const BleFailure(
-          code: BleFailureCode.protocolError,
-          message: 'Unexpected buffered OTA response before control command',
+        BleFailure(
+          code: BleFailureCode.connectionFailed,
+          message:
+              'OTA control response 0x${expectedResponse.toRadixString(16)} remains ambiguous; reconnect before reusing it',
         ),
       );
     }
-    final wait = _registerResponseWait(
-      expectedResponse,
-      timeout: const Duration(seconds: 3),
-    );
-    final writeResult = await _transport.write(
-      deviceId,
-      RingOtaProtocol.serviceUuid,
-      RingOtaProtocol.commandCharacteristicUuid,
-      command,
-    );
-    if (writeResult case Err(:final error)) {
-      _failResponseWait(error);
-      _abort(error);
+    for (
+      var attempt = 1;
+      attempt <= RingOtaProtocol.maxControlAttempts;
+      attempt++
+    ) {
+      _checkActive();
+      if (_responseQueue.isNotEmpty || _pendingResponse != null) {
+        _abort(
+          const BleFailure(
+            code: BleFailureCode.protocolError,
+            message: 'Unexpected buffered OTA response before control command',
+          ),
+        );
+      }
+      final wait = _registerResponseWait(
+        expectedResponse,
+        timeout: const Duration(seconds: 3),
+      );
+      if (attempt > 1) _possibleDuplicateControlResponse = expectedResponse;
+      final writeResult = await _transport.write(
+        deviceId,
+        RingOtaProtocol.serviceUuid,
+        RingOtaProtocol.commandCharacteristicUuid,
+        command,
+      );
+      if (writeResult case Err(:final error)) {
+        _failResponseWait(error);
+        _abort(error);
+      }
+      try {
+        await _awaitRegistered(
+          wait,
+          requireReconnectOnTimeout:
+              attempt == RingOtaProtocol.maxControlAttempts,
+        );
+        return;
+      } on _RingOtaAbort catch (abort) {
+        if (abort.failure.code == BleFailureCode.timeout &&
+            attempt < RingOtaProtocol.maxControlAttempts) {
+          continue;
+        }
+        rethrow;
+      }
     }
-    await _awaitRegistered(wait);
   }
 
   Future<void> _waitForResponse(int expected, Duration timeout) async {
@@ -404,12 +452,15 @@ class RingOtaSession implements BleSession {
     return pending;
   }
 
-  Future<void> _awaitRegistered(_PendingOtaResponse pending) async {
+  Future<void> _awaitRegistered(
+    _PendingOtaResponse pending, {
+    bool requireReconnectOnTimeout = true,
+  }) async {
     final result = await pending.future.timeout(
       pending.timeout,
       onTimeout: () {
         if (identical(_pendingResponse, pending)) _pendingResponse = null;
-        _requiresReconnect = true;
+        if (requireReconnectOnTimeout) _requiresReconnect = true;
         return const Result.err(
           BleFailure(
             code: BleFailureCode.timeout,
@@ -436,6 +487,12 @@ class RingOtaSession implements BleSession {
     if (_disposed) return;
     final result = RingOtaProtocol.parseResponse(value);
     final pending = _pendingResponse;
+    if (result case Ok(:final value)
+        when value.code == _possibleDuplicateControlResponse &&
+            (pending == null || pending.expected != value.code)) {
+      _possibleDuplicateControlResponse = null;
+      return;
+    }
     if (pending != null) {
       _pendingResponse = null;
       if (result case Ok(:final value) when value.code != pending.expected) {
@@ -504,6 +561,34 @@ class RingOtaSession implements BleSession {
     int? partitionIndex,
   ]) {
     if (_snapshots.isClosed) return;
+    final now = DateTime.now();
+    final lastAt = _lastSnapshotAt;
+    final phaseChanged = phase != _lastSnapshotPhase;
+    final terminal = const {
+      RingOtaTransferPhase.bootloaderComplete,
+      RingOtaTransferPhase.rebooting,
+      RingOtaTransferPhase.cancelled,
+      RingOtaTransferPhase.failed,
+    }.contains(phase);
+    final previousPercent = package.totalSize == 0
+        ? 0
+        : (_lastSnapshotBytes * 100) ~/ package.totalSize;
+    final currentPercent = package.totalSize == 0
+        ? 100
+        : (acknowledgedBytes * 100) ~/ package.totalSize;
+    final intervalReached =
+        lastAt == null ||
+        now.difference(lastAt) >= const Duration(milliseconds: 250);
+    if (!phaseChanged &&
+        !terminal &&
+        acknowledgedBytes != package.totalSize &&
+        currentPercent - previousPercent < 1 &&
+        !intervalReached) {
+      return;
+    }
+    _lastSnapshotPhase = phase;
+    _lastSnapshotBytes = acknowledgedBytes;
+    _lastSnapshotAt = now;
     _snapshots.add(
       RingOtaTransferSnapshot(
         phase: phase,
@@ -513,6 +598,13 @@ class RingOtaSession implements BleSession {
         totalBytes: package.totalSize,
       ),
     );
+  }
+
+  bool _isBurstRetry(BleFailure failure) {
+    final cause = failure.cause;
+    return cause is RingOtaDeviceFailure &&
+        cause.error == RingOtaDeviceError.badData &&
+        cause.responseCode == RingOtaProtocol.responseBlockBurst;
   }
 
   bool _containsRequiredGatt(List<BleDiscoveredService> services) {

@@ -92,6 +92,59 @@ void main() {
       );
       expect(dynamicAdapter.id, 'ring-ota-v1');
     });
+
+    test(
+      'requires exact application Manufacturer Data MAC after candidate filtering',
+      () {
+        final identity = RingDeviceIdentity.fromMac('01:02:03:04:05:06');
+        BleManufacturerData advertisement(List<int> mac) => BleManufacturerData(
+          companyId: RingProtocol.manufacturerIdentifier,
+          payload: Uint8List.fromList([
+            ...mac,
+            0x03,
+            0x02,
+            0x01,
+            0,
+            0x02,
+            0,
+            0x03,
+            0,
+            0x01,
+            0,
+            0x01,
+          ]),
+        );
+
+        expect(
+          identity.matchesApplicationDevice(
+            BleScanDevice(
+              deviceId: 'application-target',
+              name: RingProtocol.deviceName,
+              manufacturerData: [advertisement(identity.applicationMac)],
+            ),
+          ),
+          isTrue,
+        );
+        expect(
+          identity.matchesApplicationDevice(
+            BleScanDevice(
+              deviceId: 'same-name-wrong-mac',
+              name: RingProtocol.deviceName,
+              manufacturerData: [
+                advertisement([1, 2, 3, 4, 5, 7]),
+              ],
+            ),
+          ),
+          isFalse,
+        );
+        expect(
+          identity.matchesApplicationDevice(
+            BleScanDevice(deviceId: 'name-only', name: RingProtocol.deviceName),
+          ),
+          isFalse,
+        );
+      },
+    );
   });
 
   group('RingOtaProtocol', () {
@@ -533,7 +586,6 @@ void main() {
           (RingOtaTransferPhase.declaringPartition, 0),
           (RingOtaTransferPhase.transferringPartition, 0),
           (RingOtaTransferPhase.transferringPartition, 160),
-          (RingOtaTransferPhase.transferringPartition, 160),
           (RingOtaTransferPhase.awaitingPartitionComplete, 164),
           (RingOtaTransferPhase.declaringPartition, 164),
           (RingOtaTransferPhase.transferringPartition, 164),
@@ -542,6 +594,320 @@ void main() {
           (RingOtaTransferPhase.bootloaderComplete, 324),
           (RingOtaTransferPhase.rebooting, 324),
         ]);
+      },
+    );
+
+    test(
+      'retransmits one [0x68, 0x87] burst at most three times without duplicate acknowledgement',
+      () async {
+        final fake = _FakeTransport(mtu: 23);
+        final session = _session(fake);
+        final snapshots = <RingOtaTransferSnapshot>[];
+        final subscription = session.snapshotStream.listen(snapshots.add);
+        addTearDown(() async {
+          await subscription.cancel();
+          await session.dispose();
+          await fake.close();
+        });
+        var dataWrites = 0;
+        fake.onWrite = (write) {
+          if (write.characteristicId ==
+              RingOtaProtocol.commandCharacteristicUuid) {
+            fake.respond(
+              write.value.first == 0x01
+                  ? RingOtaProtocol.responseStart
+                  : RingOtaProtocol.responsePartitionInfo,
+            );
+          } else {
+            dataWrites++;
+            fake.respondRaw(
+              dataWrites == 1
+                  ? [0, RingOtaProtocol.responseBlockBurst]
+                  : [0x68, RingOtaProtocol.responseBlockBurst],
+            );
+          }
+        };
+        expect((await session.initialize()).isOk, isTrue);
+
+        final result = await session.transfer(
+          _package([
+            _PartitionSpec(
+              0,
+              0x1FFF0000,
+              List<int>.generate(44, (index) => index),
+            ),
+          ]),
+          burstSize: 1,
+        );
+        await _flushEvents();
+
+        expect(result.failureOrNull?.code, BleFailureCode.deviceError);
+        expect(
+          dataWrites,
+          5,
+          reason: 'initial write, then exactly three resends',
+        );
+        expect(
+          snapshots.map((snapshot) => snapshot.acknowledgedBytes).toSet(),
+          {0, 20},
+          reason:
+              'the accepted first burst must not be counted again while retrying the second',
+        );
+        expect(snapshots.last.acknowledgedBytes, 20);
+      },
+    );
+
+    test(
+      'retransmits partial tails after [0x68, 0x87] and waits for their 0x85 or 0x83 terminal ACK',
+      () async {
+        final fake = _FakeTransport(mtu: 23);
+        final session = _session(fake);
+        final snapshots = <RingOtaTransferSnapshot>[];
+        final subscription = session.snapshotStream.listen(snapshots.add);
+        addTearDown(() async {
+          await subscription.cancel();
+          await session.dispose();
+          await fake.close();
+        });
+        var partition = -1;
+        var writesInPartition = 0;
+        fake.onWrite = (write) {
+          if (write.characteristicId ==
+              RingOtaProtocol.commandCharacteristicUuid) {
+            switch (write.value.first) {
+              case 0x01:
+                fake.respond(RingOtaProtocol.responseStart);
+              case 0x02:
+                partition++;
+                writesInPartition = 0;
+                fake.respond(RingOtaProtocol.responsePartitionInfo);
+              case 0x04:
+                fake.respond(RingOtaProtocol.responseReboot);
+            }
+            return;
+          }
+          writesInPartition++;
+          fake.respondRaw(
+            writesInPartition == 1
+                ? [0x68, RingOtaProtocol.responseBlockBurst]
+                : [
+                    0,
+                    partition == 0
+                        ? RingOtaProtocol.responsePartitionComplete
+                        : RingOtaProtocol.responseOtaComplete,
+                  ],
+          );
+        };
+        expect((await session.initialize()).isOk, isTrue);
+
+        final result = await session.transfer(_goldenPackage());
+        await _flushEvents();
+
+        expect(result.isOk, isTrue);
+        final dataWrites = fake.writes
+            .where(
+              (write) =>
+                  write.characteristicId ==
+                  RingOtaProtocol.dataCharacteristicUuid,
+            )
+            .toList();
+        expect(dataWrites, hasLength(4));
+        expect(dataWrites[0].value, dataWrites[1].value);
+        expect(dataWrites[2].value, dataWrites[3].value);
+        expect(
+          snapshots
+              .where(
+                (snapshot) =>
+                    snapshot.phase ==
+                    RingOtaTransferPhase.awaitingPartitionComplete,
+              )
+              .map((snapshot) => snapshot.acknowledgedBytes),
+          [4, 8],
+          reason: 'only terminal ACKs advance each partial tail',
+        );
+      },
+    );
+
+    test(
+      'retries a timed out control once and isolates its late duplicate ACK',
+      () async {
+        final fake = _FakeTransport();
+        final session = _session(fake);
+        addTearDown(() async {
+          await session.dispose();
+          await fake.close();
+        });
+        var startWrites = 0;
+        var partition = -1;
+        fake.onWrite = (write) {
+          if (write.characteristicId ==
+              RingOtaProtocol.commandCharacteristicUuid) {
+            switch (write.value.first) {
+              case 0x01:
+                startWrites++;
+              case 0x02:
+                partition++;
+              case 0x04:
+                fake.respond(RingOtaProtocol.responseReboot);
+            }
+          } else {
+            fake.respond(
+              partition == 0
+                  ? RingOtaProtocol.responsePartitionComplete
+                  : RingOtaProtocol.responseOtaComplete,
+            );
+          }
+        };
+        expect((await session.initialize()).isOk, isTrue);
+
+        final transfer = session.transfer(_goldenPackage());
+        await _until(() => startWrites == 1);
+        await Future<void>.delayed(const Duration(seconds: 3));
+        await _until(() => startWrites == 2);
+        expect(
+          startWrites,
+          2,
+          reason: 'first control timeout permits one retry',
+        );
+
+        fake.respond(RingOtaProtocol.responseStart);
+        await _until(
+          () =>
+              fake.writes
+                      .where(
+                        (write) =>
+                            write.characteristicId ==
+                            RingOtaProtocol.commandCharacteristicUuid,
+                      )
+                      .map((write) => write.value.first)
+                      .where((command) => command == 0x01)
+                      .length ==
+                  2 &&
+              fake.writes
+                      .where(
+                        (write) =>
+                            write.characteristicId ==
+                            RingOtaProtocol.commandCharacteristicUuid,
+                      )
+                      .where((write) => write.value.first == 0x02)
+                      .length ==
+                  1,
+        );
+        fake.respond(RingOtaProtocol.responseStart);
+        fake.respond(RingOtaProtocol.responsePartitionInfo);
+        await _until(
+          () =>
+              fake.writes
+                  .where(
+                    (write) =>
+                        write.characteristicId ==
+                        RingOtaProtocol.commandCharacteristicUuid,
+                  )
+                  .where((write) => write.value.first == 0x02)
+                  .length ==
+              2,
+        );
+        fake.respond(RingOtaProtocol.responsePartitionInfo);
+
+        expect((await transfer).isOk, isTrue);
+        expect(startWrites, 2);
+      },
+    );
+
+    test(
+      'requires reconnect before a second PARTITION_INFO when its retried 0x84 remains ambiguous',
+      () async {
+        final fake = _FakeTransport();
+        final session = _session(fake);
+        addTearDown(() async {
+          await session.dispose();
+          await fake.close();
+        });
+        var partitionInfoWrites = 0;
+        var dataWrites = 0;
+        fake.onWrite = (write) {
+          if (write.characteristicId ==
+              RingOtaProtocol.commandCharacteristicUuid) {
+            switch (write.value.first) {
+              case 0x01:
+                fake.respond(RingOtaProtocol.responseStart);
+              case 0x02:
+                partitionInfoWrites++;
+                if (partitionInfoWrites == 2) {
+                  fake.respond(RingOtaProtocol.responsePartitionInfo);
+                }
+            }
+          } else {
+            dataWrites++;
+            fake.respond(RingOtaProtocol.responsePartitionComplete);
+          }
+        };
+        expect((await session.initialize()).isOk, isTrue);
+
+        final transfer = session.transfer(_goldenPackage());
+        await _until(() => partitionInfoWrites == 1);
+        await Future<void>.delayed(const Duration(seconds: 3));
+        final result = await transfer;
+
+        expect(result.failureOrNull?.code, BleFailureCode.connectionFailed);
+        expect(
+          partitionInfoWrites,
+          2,
+          reason: 'the second partition must not write PARTITION_INFO',
+        );
+        expect(
+          dataWrites,
+          1,
+          reason: 'only the first partition may write data',
+        );
+      },
+    );
+
+    test(
+      'consumes a retried PARTITION_INFO duplicate during data wait before continuing to the next partition',
+      () async {
+        final fake = _FakeTransport();
+        final session = _session(fake);
+        addTearDown(() async {
+          await session.dispose();
+          await fake.close();
+        });
+        var partitionInfoWrites = 0;
+        var dataWrites = 0;
+        fake.onWrite = (write) {
+          if (write.characteristicId ==
+              RingOtaProtocol.commandCharacteristicUuid) {
+            switch (write.value.first) {
+              case 0x01:
+                fake.respond(RingOtaProtocol.responseStart);
+              case 0x02:
+                partitionInfoWrites++;
+                if (partitionInfoWrites > 1) {
+                  fake.respond(RingOtaProtocol.responsePartitionInfo);
+                }
+              case 0x04:
+                fake.respond(RingOtaProtocol.responseReboot);
+            }
+          } else {
+            dataWrites++;
+            if (dataWrites == 1) {
+              fake.respond(RingOtaProtocol.responsePartitionInfo);
+              fake.respond(RingOtaProtocol.responsePartitionComplete);
+            } else {
+              fake.respond(RingOtaProtocol.responseOtaComplete);
+            }
+          }
+        };
+        expect((await session.initialize()).isOk, isTrue);
+
+        final transfer = session.transfer(_goldenPackage());
+        await _until(() => partitionInfoWrites == 1);
+        await Future<void>.delayed(const Duration(seconds: 3));
+        final result = await transfer;
+
+        expect(result.isOk, isTrue);
+        expect(partitionInfoWrites, 3);
+        expect(dataWrites, 2);
       },
     );
 

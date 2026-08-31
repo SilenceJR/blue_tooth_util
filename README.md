@@ -8,7 +8,7 @@ Sublinur 的 BLE 协议包。包内负责扫描、连接、GATT 传输、协议�
 - `BlueToothSdk` 负责权限、扫描、连接和协议 Adapter 选择。
 - `RingProtocolAdapter` 和 `RingBleSession` 负责智能戒指业务协议；业务会话已公开 OTA 信息查询和进入 OTA 模式命令。
 - 主 App 页面通过 `BlueToothServer` 使用 BLE，不直接操作 GATT。
-- OTA 计划继续沿用 Adapter、Session 和 Transport 分层，不在 App 内复制字节协议。
+- OTA 沿用 Adapter、Session 和 Transport 分层；跨连接恢复由 BLE 包管理，页面、下载和升级意图仍归 App。
 
 ## 协议文档
 
@@ -41,8 +41,10 @@ flutter test
 
 OTA B2 协议基础已实现：`RingOtaInfo` 严格解析 `0x0402` 的 16 字节响应，`RingDeviceIdentity` 负责应用 MAC 标准化、OTA MAC 派生和 `0x0504` Manufacturer Data 身份确认；`RingBleSession.enterOtaMode()` 在收到 `0x0401` 确认后等待设备主动断链，5 秒未断链只返回明确状态，不自动扫描或宣告成功。
 
-OTA B3 包门禁已实现：`RingOtaPackageParser` 只接受通过设备能力、`.rota v1` 结构、seed 0 CRC、分区长度与物理 Flash 范围、8 字节产品和显式版本策略校验的合成或受控包。普通升级只允许更高版本，同版本必须使用 `sameVersionRecovery`，低版本和要求加密的设备一律拒绝；本包未实现 AES-CCM。OTA 模式 Session、传输状态机和最终版本确认仍待后续阶段。
+OTA B3 包门禁已实现：`RingOtaPackageParser` 只接受通过设备能力、`.rota v1` 结构、seed 0 CRC、分区长度与物理 Flash 范围、8 字节产品和显式版本策略校验的合成或受控包。普通升级只允许更高版本，同版本必须使用 `sameVersionRecovery`，低版本和要求加密的设备一律拒绝；本包未实现 AES-CCM。
 
-OTA B4 单轮正常路径已实现：调用方用绑定目标身份的 `RingOtaProtocolAdapter` 连接，`RingOtaSession` 按实际 MTU、GATT 能力和 Notify 初始化，迭代执行 START_OTA、分区声明、burst 数据、OTA_COMPLETE、延迟 REBOOT 应答和主动断开。`RingOtaTransferResult` 只表示 Bootloader 传输与重启命令完成，`requiresVersionConfirmation` 固定为 true，不能直接显示升级成功。断连重连、设备错误重试、恢复、进度限流和业务模式 `0x0402` 最终确认属于 B5。
+OTA B4 单轮正常路径已实现：调用方用绑定目标身份的 `RingOtaProtocolAdapter` 连接，`RingOtaSession` 按实际 MTU、GATT 能力和 Notify 初始化，迭代执行 START_OTA、分区声明、burst 数据、OTA_COMPLETE、延迟 REBOOT 应答和主动断开。`RingOtaTransferResult` 只表示 Bootloader 传输与重启命令完成，`requiresVersionConfirmation` 固定为 true，不能直接显示升级成功。
+
+OTA B5 恢复与最终确认已实现：`RingOtaSession` 对控制命令超时只重发一次，对 `68 87` 从未确认 burst 边界最多重发三次，并只按设备 ACK 字节以 250 ms 或 1% 门槛发布纯进度。`RingOtaUpdateSession` 用最多三轮的迭代流程精确重扫目标 OTA 设备、重新连接并从 START_OTA 整包恢复；只有精确业务 Manufacturer Data 目标重连且 `0x0402.fw_version` 等于包版本时，才返回 `RingOtaUpdateResult`。格式、参数、地址、分包、安全和未知设备错误不自动重试。
 
 BLE、MTU、无响应写和 OTA 恢复必须在 Android 与 iPhone 真机验证；模拟器构建只证明编译和原生依赖集成通过。

@@ -324,6 +324,34 @@ class RingDeviceIdentity {
         device.manufacturerData.any(matchesOtaManufacturerData);
   }
 
+  /// 名称、业务 Service 或合法戒指广播是否表明这是业务模式候选设备。
+  ///
+  /// 候选条件只用于减少扫描结果；仍须由 [matchesApplicationDevice] 用
+  /// Manufacturer Data 中的 MAC 确认目标身份。
+  bool isApplicationCandidate(BleScanDevice device) {
+    final name = device.name ?? device.rawName ?? '';
+    final service = _normalizeUuid(RingProtocol.serviceUuid);
+    return name.startsWith(RingProtocol.deviceName) ||
+        device.services.any((item) => _normalizeUuid(item) == service);
+  }
+
+  /// 业务模式 Manufacturer Data 是否携带本身份的原始 MAC。
+  bool matchesApplicationManufacturerData(BleManufacturerData data) {
+    final advertisement = RingAdvertisement.fromManufacturerData(data);
+    final mac = advertisement.valueOrNull?.macAddress;
+    if (mac == null || mac.length != _applicationMac.length) return false;
+    for (var index = 0; index < mac.length; index++) {
+      if (mac[index] != _applicationMac[index]) return false;
+    }
+    return true;
+  }
+
+  /// 同时通过业务候选筛选和 Manufacturer Data 身份确认。
+  bool matchesApplicationDevice(BleScanDevice device) {
+    return isApplicationCandidate(device) &&
+        device.manufacturerData.any(matchesApplicationManufacturerData);
+  }
+
   static String _normalizeUuid(String value) =>
       value.replaceAll('-', '').toLowerCase();
 }
@@ -385,7 +413,9 @@ class RingAdvertisement {
   /// 从扫描结果解析智能戒指厂商数据。
   ///
   /// [device] 为 SDK 扫描结果；若没有符合 `0x4A59` 结构的厂商数据返回失败。
-  static Result<RingAdvertisement, BleFailure> fromScanDevice(BleScanDevice device) {
+  static Result<RingAdvertisement, BleFailure> fromScanDevice(
+    BleScanDevice device,
+  ) {
     for (final data in device.manufacturerData) {
       final result = fromManufacturerData(data);
       if (result case Ok<RingAdvertisement, BleFailure>()) {

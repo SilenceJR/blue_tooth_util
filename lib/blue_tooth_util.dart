@@ -15,5 +15,7 @@ export 'src/ring/ring_ota_protocol.dart';
 export 'src/ring/ring_ota_protocol_adapter.dart';
 export 'src/ring/ring_ota_session.dart';
 export 'src/ring/ring_ota_transfer_models.dart';
+export 'src/ring/ring_ota_update_models.dart';
+export 'src/ring/ring_ota_update_session.dart';
 export 'src/ring/ring_protocol.dart';
 export 'src/ring/ring_protocol_adapter.dart';
