@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:common/common.dart';
 
 import '../common/ble_failure.dart';
+import '../common/crc16.dart';
 
 /// 智能戒指协议命令字。
 enum RingCommand {
@@ -282,18 +283,7 @@ class RingFrameCodec {
   ///
   /// [bytes] 为参与校验的字节，协议中范围为 CmdType 到 Payload。
   static int crc16Modbus(List<int> bytes) {
-    var crc = 0xFFFF;
-    for (final byte in bytes) {
-      crc ^= byte;
-      for (var bit = 0; bit < 8; bit++) {
-        if ((crc & 0x0001) != 0) {
-          crc = (crc >> 1) ^ 0xA001;
-        } else {
-          crc >>= 1;
-        }
-      }
-    }
-    return crc & 0xFFFF;
+    return bleCrc16Modbus(bytes, seed: 0xFFFF);
   }
 
   static Result<RingFrame, BleFailure> _invalid(String message) {

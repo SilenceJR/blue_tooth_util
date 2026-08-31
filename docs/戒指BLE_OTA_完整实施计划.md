@@ -2,7 +2,7 @@
 
 > 记录日期：2026-08-31  
 > 协议基线：《戒指BLE_OTA_App对接文档》v1.2.1  
-> 状态：B0 仓库配置、B1 BLE 依赖回归和 B2 应用模式 OTA 协议基础已完成；`.rota`、OTA 模式传输和真机验证尚未完成
+> 状态：B0 仓库配置、B1 BLE 依赖回归、B2 应用模式协议和 B3 `.rota v1` 门禁已完成；OTA 模式传输、恢复和真机验证尚未完成
 
 ## 1. 目标与边界
 
@@ -59,7 +59,7 @@
 
 - `RingOtaInfo`：设备版本、产品、Bootloader 版本和能力位。B2 已实现。
 - `RingDeviceIdentity`：MAC 标准化、派生和广播字节序。B2 已实现。
-- `RingOtaPackage`、`RingOtaPartition`、`RingOtaPackageParser`：升级包解析和拒绝规则。
+- `RingOtaPackage`、`RingOtaPartition`、`RingOtaPackageParser`：升级包解析和拒绝规则。B3 已实现。
 - `RingOtaProtocolAdapter`、`RingOtaSession`：OTA 模式匹配、初始化和传输。
 - `RingOtaTransferSnapshot`、`RingOtaTransferResult`：进度和最终结果。
 
@@ -77,6 +77,8 @@
 - 分区为空、超过 16,384 B、未按 4 B 对齐。
 - SRAM、XIP、应用 bank、loader 或持久化区越界。
 - 分区地址重叠或数据被截断。
+
+B3 只拒绝规范化后的物理 Flash 区间重叠；协议没有规定 SRAM `run_addr` overlay 禁令，因此未擅自增加该限制。地址也未增加文档之外的 4 B 或 4 KB 对齐规则。`RingOtaVersionPolicy.normalUpgrade` 只接受更高版本，`sameVersionRecovery` 只接受同版本；低版本没有无签名放行开关。要求 AES-CCM 的设备会拒绝明文 `.rota v1`，加密格式和握手仍需单独方案确认。
 
 测试使用合成小包和确定性 CRC，不提交真实固件。
 
@@ -105,7 +107,7 @@
 
 BLE 包已将依赖升级并锁定到 `universal_ble 2.2.0`，约束为 `>=2.2.0 <2.3.0`。B2 在业务协议层增加 `0x0402`、`0x0401`、OTA 信息和身份模型；Adapter、Session 和模型仍不直接导入平台插件。
 
-BLE 包 B2 定向测试共 25 项通过，BLE Example widget test、Example iOS Simulator debug 构建和 Android debug APK 构建沿用 B1 证据。完整 App 编译、Android 真机和 iPhone 真机仍是后续验收项。
+BLE 包 B3 合成包定向测试共 13 项通过；与 B2 协议测试合计 38 项通过。测试使用硬编码 72 B 双分区 golden 和独立测试侧 CRC，不提交真实固件。BLE Example widget test、Example iOS Simulator debug 构建和 Android debug APK 构建沿用 B1 证据。完整 App 编译、Android 真机和 iPhone 真机仍是后续验收项。
 
 BLE 业务层只依赖 `BleTransport` 返回的实际 MTU 和顺序 `await write()`，不复制 CoreBluetooth 或 Android GATT 回调。Apple central 模式的高吞吐无响应写仍需 iPhone 真机验证，不能仅凭插件版本或模拟器构建判定流控通过。
 

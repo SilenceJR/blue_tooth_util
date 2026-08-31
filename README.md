@@ -39,6 +39,8 @@ flutter test
 
 依赖基线为 `universal_ble >=2.2.0 <2.3.0`。自动化回归覆盖扫描参数和广播映射、权限与可用状态、实际 MTU、服务能力、Notify、带响应写、无响应写顺序和断开调用。
 
-OTA B2 协议基础已实现：`RingOtaInfo` 严格解析 `0x0402` 的 16 字节响应，`RingDeviceIdentity` 负责应用 MAC 标准化、OTA MAC 派生和 `0x0504` Manufacturer Data 身份确认；`RingBleSession.enterOtaMode()` 在收到 `0x0401` 确认后等待设备主动断链，5 秒未断链只返回明确状态，不自动扫描或宣告成功。`.rota` 解析、OTA 模式 Session、传输状态机和最终版本确认仍待后续阶段。
+OTA B2 协议基础已实现：`RingOtaInfo` 严格解析 `0x0402` 的 16 字节响应，`RingDeviceIdentity` 负责应用 MAC 标准化、OTA MAC 派生和 `0x0504` Manufacturer Data 身份确认；`RingBleSession.enterOtaMode()` 在收到 `0x0401` 确认后等待设备主动断链，5 秒未断链只返回明确状态，不自动扫描或宣告成功。
+
+OTA B3 包门禁已实现：`RingOtaPackageParser` 只接受通过设备能力、`.rota v1` 结构、seed 0 CRC、分区长度与物理 Flash 范围、8 字节产品和显式版本策略校验的合成或受控包。普通升级只允许更高版本，同版本必须使用 `sameVersionRecovery`，低版本和要求加密的设备一律拒绝；本包未实现 AES-CCM。OTA 模式 Session、传输状态机和最终版本确认仍待后续阶段。
 
 BLE、MTU、无响应写和 OTA 恢复必须在 Android 与 iPhone 真机验证；模拟器构建只证明编译和原生依赖集成通过。
