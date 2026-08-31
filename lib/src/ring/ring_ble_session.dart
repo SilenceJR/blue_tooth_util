@@ -51,6 +51,8 @@ class RingBleSession implements BleSession {
   bool _initialized = false;
   bool _screenFlipBusy = false;
   bool _findRingBusy = false;
+  bool _otaEntryBusy = false;
+  Completer<Result<RingOtaEntryState, BleFailure>>? _otaEntryOutcome;
   Completer<Result<RingScreenDirection, BleFailure>>? _screenFlipDone;
   Completer<Result<void, BleFailure>>? _findRingDone;
 
@@ -138,11 +140,19 @@ class RingBleSession implements BleSession {
     _subscriptions.add(
       connectionStream.listen((connected) {
         if (!connected) {
+          if (_otaEntryBusy && _otaEntryOutcome?.isCompleted == false) {
+            _otaEntryOutcome?.complete(
+              const Result.ok(RingOtaEntryState.deviceDisconnected),
+            );
+          }
           _failPending(
             const BleFailure(
               code: BleFailureCode.connectionFailed,
               message: 'BLE device disconnected',
             ),
+            exceptCommandValue: _otaEntryBusy
+                ? RingCommand.otaEnter.value
+                : null,
           );
         }
       }),
@@ -242,6 +252,51 @@ class RingBleSession implements BleSession {
   Future<Result<DateTime, BleFailure>> queryTime() async {
     final result = await _sendAndWait(RingCommand.queryTime);
     return _mapPayload(result, ringParseTimePayload);
+  }
+
+  /// 查询应用固件与 OTA Bootloader 信息。
+  Future<Result<RingOtaInfo, BleFailure>> queryOtaInfo() async {
+    final result = await _sendAndWait(RingCommand.otaInfo);
+    return _mapPayload(result, RingOtaInfo.fromPayload);
+  }
+
+  /// 请求设备进入 OTA 模式，并等待设备主动断开业务链路。
+  ///
+  /// 收到精确 `[0x01]` 后最多等待 5 秒。超时只返回
+  /// [RingOtaEntryState.disconnectTimedOut]，不主动断开或扫描，由上层决定下一步。
+  Future<Result<RingOtaEntryState, BleFailure>> enterOtaMode() async {
+    if (_otaEntryBusy) {
+      return const Result.err(
+        BleFailure(
+          code: BleFailureCode.busy,
+          message: 'OTA mode entry is already in progress',
+        ),
+      );
+    }
+    _otaEntryBusy = true;
+    final outcome = Completer<Result<RingOtaEntryState, BleFailure>>();
+    _otaEntryOutcome = outcome;
+    try {
+      final result = await _sendAndWait(RingCommand.otaEnter);
+      if (result case Err(:final error)) return Result.err(error);
+      final payload = result.valueOrNull!.payload;
+      if (payload.length != 1 || payload[0] != 0x01) {
+        return const Result.err(
+          BleFailure(
+            code: BleFailureCode.protocolError,
+            message: 'Unexpected OTA mode entry status',
+          ),
+        );
+      }
+      return await outcome.future.timeout(
+        const Duration(seconds: 5),
+        onTimeout: () =>
+            const Result.ok(RingOtaEntryState.disconnectTimedOut),
+      );
+    } finally {
+      _otaEntryBusy = false;
+      _otaEntryOutcome = null;
+    }
   }
 
   /// 翻转屏幕方向。
@@ -449,12 +504,14 @@ class RingBleSession implements BleSession {
     for (final subscription in _subscriptions) {
       await subscription.cancel();
     }
-    _failPending(
-      const BleFailure(
-        code: BleFailureCode.connectionFailed,
-        message: 'Ring session disposed',
-      ),
+    const disposedFailure = BleFailure(
+      code: BleFailureCode.connectionFailed,
+      message: 'Ring session disposed',
     );
+    if (_otaEntryOutcome?.isCompleted == false) {
+      _otaEntryOutcome?.complete(const Result.err(disposedFailure));
+    }
+    _failPending(disposedFailure);
     await _logs.close();
     await _errors.close();
     await _battery.close();
@@ -611,6 +668,7 @@ class RingBleSession implements BleSession {
       final failure = BleFailure(
         code: BleFailureCode.deviceError,
         message: error?.message ?? 'Ring device returned an error',
+        cause: error,
       );
       _failTwoStageCommand(frame.command, failure);
       _completePending(frame, Result.err(failure));
@@ -709,7 +767,9 @@ class RingBleSession implements BleSession {
             RingCommand.softDisconnect ||
             RingCommand.setTime ||
             RingCommand.clearZikrHistoryDay ||
-            RingCommand.prayerReminderSet:
+            RingCommand.prayerReminderSet ||
+            RingCommand.otaEnter ||
+            RingCommand.otaInfo:
         case null:
       }
     } catch (error) {
@@ -789,7 +849,7 @@ class RingBleSession implements BleSession {
     _PendingFrame? match;
     for (final pending in _pendingFrames) {
       if (pending.commandValue == frame.commandValue &&
-          pending.predicate(frame)) {
+          (result.isErr || pending.predicate(frame))) {
         match = pending;
         break;
       }
@@ -799,10 +859,14 @@ class RingBleSession implements BleSession {
     match.complete(result);
   }
 
-  void _failPending(BleFailure failure) {
+  void _failPending(BleFailure failure, {int? exceptCommandValue}) {
     _failActiveActions(failure);
-    while (_pendingFrames.isNotEmpty) {
-      _pendingFrames.removeFirst().complete(Result.err(failure));
+    final failed = _pendingFrames
+        .where((pending) => pending.commandValue != exceptCommandValue)
+        .toList();
+    for (final pending in failed) {
+      _pendingFrames.remove(pending);
+      pending.complete(Result.err(failure));
     }
     if (_screenFlipDone?.isCompleted == false) {
       _screenFlipDone?.complete(Result.err(failure));
@@ -860,6 +924,15 @@ class RingBleSession implements BleSession {
     }
     return RingScreenDirection.fromValue(payload[0]);
   }
+}
+
+/// 进入 OTA 模式命令完成后的业务链路状态。
+enum RingOtaEntryState {
+  /// 设备已按协议主动断开业务链路。
+  deviceDisconnected,
+
+  /// 收到命令确认后 5 秒仍未收到断链事件，由上层决定是否主动断开。
+  disconnectTimedOut,
 }
 
 class _PendingFrame {

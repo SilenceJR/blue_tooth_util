@@ -6,7 +6,7 @@ Sublinur 的 BLE 协议包。包内负责扫描、连接、GATT 传输、协议�
 
 - `BleTransport` 隔离 `universal_ble`，协议和测试不直接依赖平台插件。
 - `BlueToothSdk` 负责权限、扫描、连接和协议 Adapter 选择。
-- `RingProtocolAdapter` 和 `RingBleSession` 负责智能戒指业务协议。
+- `RingProtocolAdapter` 和 `RingBleSession` 负责智能戒指业务协议；业务会话已公开 OTA 信息查询和进入 OTA 模式命令。
 - 主 App 页面通过 `BlueToothServer` 使用 BLE，不直接操作 GATT。
 - OTA 计划继续沿用 Adapter、Session 和 Transport 分层，不在 App 内复制字节协议。
 
@@ -38,5 +38,7 @@ flutter test
 ```
 
 依赖基线为 `universal_ble >=2.2.0 <2.3.0`。自动化回归覆盖扫描参数和广播映射、权限与可用状态、实际 MTU、服务能力、Notify、带响应写、无响应写顺序和断开调用。
+
+OTA B2 协议基础已实现：`RingOtaInfo` 严格解析 `0x0402` 的 16 字节响应，`RingDeviceIdentity` 负责应用 MAC 标准化、OTA MAC 派生和 `0x0504` Manufacturer Data 身份确认；`RingBleSession.enterOtaMode()` 在收到 `0x0401` 确认后等待设备主动断链，5 秒未断链只返回明确状态，不自动扫描或宣告成功。`.rota` 解析、OTA 模式 Session、传输状态机和最终版本确认仍待后续阶段。
 
 BLE、MTU、无响应写和 OTA 恢复必须在 Android 与 iPhone 真机验证；模拟器构建只证明编译和原生依赖集成通过。
