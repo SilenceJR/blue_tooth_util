@@ -8,4 +8,7 @@
 - OTA 目标身份必须同时满足候选名称或 Service 以及 `0x0504` Manufacturer Data 派生 MAC 匹配。
 - 增加 `.rota v1` 解析器和不可变包/分区模型，校验 seed 0 CRC、长度、物理 Flash 地址、产品和版本策略。
 - 明文包遇到要求加密的设备会被拒绝；未增加 AES-CCM、服务工程降级入口或真实固件测试制品。
+- 增加绑定目标身份的 `RingOtaProtocolAdapter`、OTA GATT 协议、`RingOtaSession` 和单轮迭代传输状态。
+- 单轮流程使用延迟 REBOOT `04 01`/`00 8A` 后主动断开；传输结果明确仍需业务模式版本确认。
+- 初始化失败会释放会话并断开；取消使用稳定的 `BleFailureCode.cancelled`，不递归重试。
 - Android 与 iPhone 真机的扫描、MTU、断连重连及无响应写仍需设备验证。

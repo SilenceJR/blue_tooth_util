@@ -47,6 +47,9 @@ enum BleFailureCode {
 
   /// 命令正在执行中，需要等待前一次完成。
   busy,
+
+  /// 操作被调用方取消。
+  cancelled,
 }
 
 /// BLE SDK 失败详情。

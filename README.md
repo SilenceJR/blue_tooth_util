@@ -43,4 +43,6 @@ OTA B2 协议基础已实现：`RingOtaInfo` 严格解析 `0x0402` 的 16 字节
 
 OTA B3 包门禁已实现：`RingOtaPackageParser` 只接受通过设备能力、`.rota v1` 结构、seed 0 CRC、分区长度与物理 Flash 范围、8 字节产品和显式版本策略校验的合成或受控包。普通升级只允许更高版本，同版本必须使用 `sameVersionRecovery`，低版本和要求加密的设备一律拒绝；本包未实现 AES-CCM。OTA 模式 Session、传输状态机和最终版本确认仍待后续阶段。
 
+OTA B4 单轮正常路径已实现：调用方用绑定目标身份的 `RingOtaProtocolAdapter` 连接，`RingOtaSession` 按实际 MTU、GATT 能力和 Notify 初始化，迭代执行 START_OTA、分区声明、burst 数据、OTA_COMPLETE、延迟 REBOOT 应答和主动断开。`RingOtaTransferResult` 只表示 Bootloader 传输与重启命令完成，`requiresVersionConfirmation` 固定为 true，不能直接显示升级成功。断连重连、设备错误重试、恢复、进度限流和业务模式 `0x0402` 最终确认属于 B5。
+
 BLE、MTU、无响应写和 OTA 恢复必须在 Android 与 iPhone 真机验证；模拟器构建只证明编译和原生依赖集成通过。
