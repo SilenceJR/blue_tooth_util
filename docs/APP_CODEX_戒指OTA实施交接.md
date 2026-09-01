@@ -1,7 +1,7 @@
 # App Codex 戒指 OTA 实施交接
 
 > 目标项目：Sublinur App  
-> 依赖协议：《戒指BLE_OTA_App对接文档》v1.5
+> 依赖协议：《戒指BLE_OTA_App对接文档》v1.6；等待 BLE 版本契约迁移提交后再接入
 > 本文只定义 App 调整和验收，不授权在 `blue_tooth_util` 内复制页面或网络逻辑。
 
 ## 1. 实施前核对
