@@ -225,6 +225,54 @@ void main() {
         );
       },
     );
+
+    test(
+      'keeps the recovery version gate by default and permits an authorized downgrade',
+      () {
+        const parser = RingOtaPackageParser();
+        final downgrade = _package(firmwareVersion: 0x00010201);
+        final initialMetadata = _parse(
+          downgrade,
+          deviceInfo: _deviceInfo(firmwareVersion: 0x00010200),
+        ).valueOrNull!.recoveryMetadata;
+        final metadata = _metadataWith(initialMetadata, (json) {
+          final payload = List<int>.from(json['deviceOtaInfo']! as List);
+          payload.setRange(0, 4, const [0x02, 0x02, 0x01, 0x00]);
+          json['deviceOtaInfo'] = payload;
+        });
+
+        expect(
+          parser
+              .parseForRecovery(downgrade, metadata: metadata)
+              .failureOrNull
+              ?.code,
+          BleFailureCode.protocolError,
+        );
+        expect(
+          parser
+              .parseForRecovery(
+                downgrade,
+                metadata: metadata,
+                forceFirmware: true,
+              )
+              .isOk,
+          isTrue,
+        );
+
+        final corruptedCrc = Uint8List.fromList(downgrade)..[64] ^= 1;
+        expect(
+          parser
+              .parseForRecovery(
+                corruptedCrc,
+                metadata: metadata,
+                forceFirmware: true,
+              )
+              .failureOrNull
+              ?.code,
+          BleFailureCode.crcMismatch,
+        );
+      },
+    );
   });
 
   group('RingOtaPackageParser structure and CRC rejection', () {

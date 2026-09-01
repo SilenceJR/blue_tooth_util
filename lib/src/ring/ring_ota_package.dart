@@ -326,9 +326,24 @@ class RingOtaPackageParser {
     required RingOtaInfo deviceInfo,
     required RingOtaVersionPolicy versionPolicy,
   }) {
+    return _parseResult(
+      bytes,
+      deviceInfo: deviceInfo,
+      versionPolicy: versionPolicy,
+    );
+  }
+
+  Result<RingOtaPackage, BleFailure> _parseResult(
+    Uint8List bytes, {
+    required RingOtaInfo deviceInfo,
+    required RingOtaVersionPolicy versionPolicy,
+    bool forceFirmware = false,
+  }) {
     try {
       _validateDeviceCapabilities(deviceInfo);
-      return Result.ok(_parse(bytes, deviceInfo, versionPolicy));
+      return Result.ok(
+        _parse(bytes, deviceInfo, versionPolicy, forceFirmware: forceFirmware),
+      );
     } on _RingOtaValidationFailure catch (failure) {
       return Result.err(failure.failure);
     } catch (error) {
@@ -344,11 +359,14 @@ class RingOtaPackageParser {
 
   /// 使用持久化的首次 `0x0402` 信息和包摘要重新验证并重建 OTA 包。
   ///
-  /// 此方法始终先重建 [RingOtaInfo] 并调用完整 [parse]，不会跳过产品、版本、
-  /// 安全能力、CRC、地址或长度门禁，也不会恢复分区断点。
+  /// 此方法始终先重建 [RingOtaInfo] 并调用完整解析路径，不会跳过产品、
+  /// 安全能力、CRC、地址或长度门禁，也不会恢复分区断点。仅当调用方已在
+  /// 开发/测试或受控服务工程流程中完成授权时，才可将 [forceFirmware]
+  /// 设为 `true`，以允许目标版本低于设备当前版本；恢复摘要仍必须完全匹配。
   Result<RingOtaPackage, BleFailure> parseForRecovery(
     Uint8List bytes, {
     required RingOtaRecoveryMetadata metadata,
+    bool forceFirmware = false,
   }) {
     late final RingOtaInfo deviceInfo;
     try {
@@ -362,10 +380,11 @@ class RingOtaPackageParser {
         ),
       );
     }
-    final parsed = parse(
+    final parsed = _parseResult(
       bytes,
       deviceInfo: deviceInfo,
       versionPolicy: metadata.versionPolicy,
+      forceFirmware: forceFirmware,
     );
     if (parsed case Err(:final error)) return Result.err(error);
     final package = parsed.valueOrNull!;
@@ -377,8 +396,9 @@ class RingOtaPackageParser {
   RingOtaPackage _parse(
     Uint8List bytes,
     RingOtaInfo deviceInfo,
-    RingOtaVersionPolicy versionPolicy,
-  ) {
+    RingOtaVersionPolicy versionPolicy, {
+    bool forceFirmware = false,
+  }) {
     if (bytes.length < _headerSize) {
       _reject('ROTA package is shorter than the 32-byte header');
     }
@@ -480,11 +500,13 @@ class RingOtaPackageParser {
     if (!_bytesEqual(productBytes, deviceInfo.productBytes)) {
       _reject('ROTA product does not match the connected ring');
     }
-    _validateVersion(
-      target: firmwareVersion,
-      current: deviceInfo.firmwareVersion,
-      policy: versionPolicy,
-    );
+    if (!forceFirmware) {
+      _validateVersion(
+        target: firmwareVersion,
+        current: deviceInfo.firmwareVersion,
+        policy: versionPolicy,
+      );
+    }
 
     return RingOtaPackage._(
       firmwareVersion: firmwareVersion,
