@@ -213,6 +213,26 @@ void main() {
       expect(info.bootVersion, '1.2.3');
     });
 
+    test('round trips the exact OTA info payload with defensive copies', () {
+      final source = _otaInfoPayload();
+      final info = RingOtaInfo.fromPayload(source);
+      final encoded = info.toPayload();
+
+      expect(encoded, source);
+      expect(encoded, hasLength(16));
+      expect(
+        RingOtaInfo.fromPayload(encoded).toPayload(),
+        source,
+        reason: '0x0402 fields must keep their original little-endian bytes',
+      );
+
+      source[0] = 0;
+      encoded[4] = 0;
+      expect(info.firmwareVersion, 0x12345678);
+      expect(info.product, 'RING');
+      expect(info.toPayload(), _otaInfoPayload());
+    });
+
     test('requires exactly 16 OTA info bytes', () {
       expect(
         () => RingOtaInfo.fromPayload(Uint8List(15)),
@@ -396,20 +416,23 @@ void main() {
       expect(result.valueOrNull?.bootVersion, '1.2.3');
     });
 
-    test('does not confuse OTA firmware low byte FF with device error', () async {
-      final transport = FakeBleTransport();
-      final session = RingBleSession(device: _device(), transport: transport);
-      await session.initialize();
+    test(
+      'does not confuse OTA firmware low byte FF with device error',
+      () async {
+        final transport = FakeBleTransport();
+        final session = RingBleSession(device: _device(), transport: transport);
+        await session.initialize();
 
-      final future = session.queryOtaInfo();
-      await Future<void>.delayed(Duration.zero);
-      final payload = _otaInfoPayload()..[0] = 0xFF;
-      transport.emit(RingCommand.otaInfo, payload);
+        final future = session.queryOtaInfo();
+        await Future<void>.delayed(Duration.zero);
+        final payload = _otaInfoPayload()..[0] = 0xFF;
+        transport.emit(RingCommand.otaInfo, payload);
 
-      final result = await future;
-      expect(result.isOk, isTrue);
-      expect(result.valueOrNull?.firmwareVersion, 0x123456FF);
-    });
+        final result = await future;
+        expect(result.isOk, isTrue);
+        expect(result.valueOrNull?.firmwareVersion, 0x123456FF);
+      },
+    );
 
     test('maps malformed OTA info response to protocol error', () async {
       final transport = FakeBleTransport();
@@ -741,30 +764,33 @@ class FakeBleTransport implements BleTransport {
   }
 
   @override
-  Future<Result<void,BleFailure>> requestPermissions() async {
+  Future<Result<void, BleFailure>> requestPermissions() async {
     return const Result.ok(null);
   }
 
   @override
-  Future<Result<int, BleFailure>> requestMtu(String deviceId, int expectedMtu) async {
+  Future<Result<int, BleFailure>> requestMtu(
+    String deviceId,
+    int expectedMtu,
+  ) async {
     calls.add('requestMtu:$expectedMtu');
     return Result.ok(expectedMtu);
   }
 
   @override
-  Future<Result<void,BleFailure>> startScan(BleScanOptions options) async {
+  Future<Result<void, BleFailure>> startScan(BleScanOptions options) async {
     calls.add('startScan');
     return const Result.ok(null);
   }
 
   @override
-  Future<Result<void,BleFailure>> stopScan() async {
+  Future<Result<void, BleFailure>> stopScan() async {
     calls.add('stopScan');
     return const Result.ok(null);
   }
 
   @override
-  Future<Result<void,BleFailure>> subscribeNotifications(
+  Future<Result<void, BleFailure>> subscribeNotifications(
     String deviceId,
     String serviceId,
     String characteristicId,
@@ -774,7 +800,7 @@ class FakeBleTransport implements BleTransport {
   }
 
   @override
-  Future<Result<void,BleFailure>> write(
+  Future<Result<void, BleFailure>> write(
     String deviceId,
     String serviceId,
     String characteristicId,

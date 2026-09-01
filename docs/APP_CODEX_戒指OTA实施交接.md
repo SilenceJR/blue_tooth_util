@@ -28,6 +28,12 @@ App Codex 开始修改前必须重新读取：
 - `blue_tooth_util`：包解析、`RingOtaUpdateSession`、ACK 限流进度、跨连接恢复和 `0x0402` 最终确认。
 - 原子持久化存储：升级意图和已验证包信息。
 
+P0 恢复公开 API：`RingOtaInfo.toPayload()`、`RingOtaPackage.recoveryMetadata`、
+`RingOtaRecoveryMetadata.decode(Map<String, Object?>)` 和
+`RingOtaPackageParser.parseForRecovery(bytes, metadata: ...)`。恢复元数据使用稳定的
+`versionPolicy` 字符串和首次 `0x0402` 精确 16 字节 payload；App 不得依赖 enum ordinal，
+也不得访问或重建包/分区私有构造器。
+
 `BlueToothServer` 保留普通 BLE 所有权，但需提供窄接口：
 
 - 请求 OTA 独占权。
@@ -59,6 +65,8 @@ App Codex 开始修改前必须重新读取：
 - 校验 HTTPS 来源、清单签名、SHA-256、文件长度和失效时间。
 - 调用 BLE 包解析器校验产品、版本、分区和 CRC。
 - 任一校验失败不得发送 `0x0401`。
+
+BLE 包解析成功后，App 可保存 `RingOtaPackage.recoveryMetadata.toJson()` 作为进程重启恢复摘要。该摘要不是签名或来源真实性证明；每次恢复都必须重新读取原始固件并验证文件长度、SHA-256、签名、有效期和更新授权，再调用 `RingOtaRecoveryMetadata.decode()` 与 `RingOtaPackageParser.parseForRecovery()`，不得在 App 内手工重建 `RingOtaPackage` 或 `RingOtaPartition`。
 
 ## 4. 设备身份
 
@@ -100,7 +108,36 @@ iOS 的 `deviceId` 是系统标识，不能用于关联业务模式和 OTA 模�
 - 更新策略、阶段和尝试次数。
 - 用户是否已确认升级。
 
-不保存分区断点。协议在断连后要求从 Bootloader START_OTA 完整重传。
+发送 `0x0401` 前，升级意图、规范化应用模式 MAC、原始固件文件引用和
+`RingOtaRecoveryMetadata` 必须作为一个持久化事务原子落盘。恢复元数据不是签名或来源
+真实性证明；每次恢复仍须重新验证文件长度、SHA-256、签名、有效期和更新授权。
+不保存分区数据、ACK 字节、burst 断点、平台 `deviceId` 或“已经验证”布尔值。协议在断连
+或进程重启后要求从 Bootloader START_OTA 完整重传。
+
+设备已停留 OTA 模式时，App 直接把 `parseForRecovery()` 结果交给已有的
+`RingOtaUpdateSession.update(package)`，不要求先建立业务 Session，也不重新发送 `0x0401`。
+BLE 包会扫描精确 OTA Manufacturer Data、连接后从 START_OTA 开始完整传输；
+`OTA_COMPLETE` 后仍需回业务模式并用 `0x0402` 确认目标版本。
+
+示例调用链（固件文件的长度、哈希、签名、有效期和授权校验由 App 完成）：
+
+```dart
+final metadataResult = RingOtaRecoveryMetadata.decode(
+  Map<String, Object?>.from(persistedJson),
+);
+final packageResult = metadataResult.match(
+  ok: (metadata) => const RingOtaPackageParser().parseForRecovery(
+    firmwareBytes,
+    metadata: metadata,
+  ),
+  err: (failure) => Result.err(failure),
+);
+if (packageResult case Ok(:final value)) {
+  final session = sdk.createRingOtaUpdateSession(identity: identity);
+  final result = await session.update(value);
+  // 仅 result 成功且内部 0x0402 版本匹配时清理升级意图。
+}
+```
 
 启动或回前台时：
 

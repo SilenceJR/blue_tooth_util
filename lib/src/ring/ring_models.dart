@@ -189,6 +189,21 @@ class RingOtaInfo {
   /// Bootloader 是否执行最低版本限制。
   bool get enforcesMinimumVersion => bootFlags & 0x08 != 0;
 
+  /// 编码为 `0x0402` 使用的精确 16 字节 payload。
+  ///
+  /// 返回防御性副本；修改返回值不会影响该对象。
+  Uint8List toPayload() {
+    final payload = Uint8List(16);
+    payload[0] = firmwareVersion & 0xFF;
+    payload[1] = (firmwareVersion >> 8) & 0xFF;
+    payload[2] = (firmwareVersion >> 16) & 0xFF;
+    payload[3] = (firmwareVersion >> 24) & 0xFF;
+    payload.setRange(4, 12, _productBytes);
+    payload[12] = bootFlags;
+    payload.setRange(13, 16, _bootVersionBytes);
+    return payload;
+  }
+
   /// 解析 `0x0402` 响应。
   factory RingOtaInfo.fromPayload(Uint8List payload) {
     if (payload.length != 16) {

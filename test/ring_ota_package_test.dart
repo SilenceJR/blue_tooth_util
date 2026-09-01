@@ -61,6 +61,172 @@ void main() {
     });
   });
 
+  group('RingOtaRecoveryMetadata and recovery parser', () {
+    test('round trips v1 JSON without exposing mutable byte containers', () {
+      final package = _parse(_package()).valueOrNull!;
+      final metadata = package.recoveryMetadata;
+      final json = metadata.toJson();
+      final decoded = RingOtaRecoveryMetadata.decode(json).valueOrNull!;
+
+      expect(decoded.versionPolicy, RingOtaVersionPolicy.normalUpgrade);
+      expect(decoded.firmwareVersion, package.firmwareVersion);
+      expect(decoded.productBytes, package.productBytes);
+      expect(decoded.totalSize, package.totalSize);
+      expect(decoded.headerChecksum, package.headerChecksum);
+      expect(decoded.partitionCount, package.partitions.length);
+      expect(decoded.deviceOtaInfoPayload, _deviceInfo().toPayload());
+
+      (json['deviceOtaInfo'] as List<int>)[0] = 0;
+      (json['product'] as List<int>)[0] = 0;
+      final info = decoded.deviceOtaInfoPayload;
+      final product = decoded.productBytes;
+      info[0] = 0;
+      product[0] = 0;
+      expect(metadata.deviceOtaInfoPayload, _deviceInfo().toPayload());
+      expect(metadata.productBytes, _ringProduct);
+      expect(decoded.deviceOtaInfoPayload, _deviceInfo().toPayload());
+      expect(decoded.productBytes, _ringProduct);
+    });
+
+    test('rejects unversioned, malformed and unsafe recovery metadata', () {
+      final json = _parse(_package()).valueOrNull!.recoveryMetadata.toJson();
+      final unknownSchema = Map<String, Object?>.from(json)
+        ..['schemaVersion'] = 2;
+      final missingField = Map<String, Object?>.from(json)..remove('totalSize');
+      final unknownField = Map<String, Object?>.from(json)..['extra'] = true;
+      final wrongType = Map<String, Object?>.from(json)..['totalSize'] = '8';
+      final unknownPolicy = Map<String, Object?>.from(json)
+        ..['versionPolicy'] = 'force_downgrade';
+      final shortInfo = Map<String, Object?>.from(json)
+        ..['deviceOtaInfo'] = List<int>.filled(15, 0);
+      final reservedInfo = List<int>.from(json['deviceOtaInfo']! as List)
+        ..[12] = 0x11;
+      final reservedFlags = Map<String, Object?>.from(json)
+        ..['deviceOtaInfo'] = reservedInfo;
+
+      expect(
+        RingOtaRecoveryMetadata.decode(unknownSchema).failureOrNull?.code,
+        BleFailureCode.unsupported,
+      );
+      for (final invalid in [
+        missingField,
+        unknownField,
+        wrongType,
+        shortInfo,
+        reservedFlags,
+      ]) {
+        expect(
+          RingOtaRecoveryMetadata.decode(invalid).failureOrNull?.code,
+          BleFailureCode.protocolError,
+        );
+      }
+      expect(
+        RingOtaRecoveryMetadata.decode(unknownPolicy).failureOrNull?.code,
+        BleFailureCode.unsupported,
+      );
+    });
+
+    test(
+      'revalidates recovery identity, package summary, CRC and addresses',
+      () {
+        const parser = RingOtaPackageParser();
+        final original = _package();
+        final metadata = _parse(original).valueOrNull!.recoveryMetadata;
+
+        expect(
+          parser.parseForRecovery(original, metadata: metadata).isOk,
+          isTrue,
+        );
+
+        final targetReplacement = _package(firmwareVersion: 0x00010204);
+        final largerReplacement = _package(
+          partitions: const [
+            _PartitionSpec(
+              flashAddress: 0,
+              runAddress: 0x1FFF0000,
+              data: [1, 2, 3, 4],
+            ),
+            _PartitionSpec(
+              flashAddress: 0x11020000,
+              runAddress: 0x11020000,
+              data: [5, 6, 7, 8, 9, 10, 11, 12],
+            ),
+          ],
+        );
+        final changedPayloadReplacement = _package(
+          partitions: const [
+            _PartitionSpec(
+              flashAddress: 0,
+              runAddress: 0x1FFF0000,
+              data: [9, 9, 9, 9],
+            ),
+            _PartitionSpec(
+              flashAddress: 0x11020000,
+              runAddress: 0x11020000,
+              data: [8, 8, 8, 8],
+            ),
+          ],
+        );
+        final productMetadata = _metadataWith(metadata, (json) {
+          json['product'] = [0x52, 0x69, 0x6E, 0x67, 0x33, 0, 0, 0];
+        });
+        final headerMetadata = _metadataWith(metadata, (json) {
+          json['headerChecksum'] = (json['headerChecksum']! as int) ^ 1;
+        });
+        final countMetadata = _metadataWith(metadata, (json) {
+          json['partitionCount'] = 1;
+        });
+
+        for (final attempt in [
+          (targetReplacement, metadata),
+          (largerReplacement, metadata),
+          (changedPayloadReplacement, metadata),
+          (original, productMetadata),
+          (original, headerMetadata),
+          (original, countMetadata),
+        ]) {
+          expect(
+            parser
+                .parseForRecovery(attempt.$1, metadata: attempt.$2)
+                .failureOrNull
+                ?.code,
+            BleFailureCode.protocolError,
+          );
+        }
+
+        final corruptedCrc = Uint8List.fromList(original)..[64] ^= 1;
+        expect(
+          parser
+              .parseForRecovery(corruptedCrc, metadata: metadata)
+              .failureOrNull
+              ?.code,
+          BleFailureCode.crcMismatch,
+        );
+        final invalidAddress = _package(
+          partitions: const [
+            _PartitionSpec(
+              flashAddress: 0xF000,
+              runAddress: 0x1FFF0000,
+              data: [1, 2, 3, 4],
+            ),
+            _PartitionSpec(
+              flashAddress: 0x11020000,
+              runAddress: 0x11020000,
+              data: [5, 6, 7, 8],
+            ),
+          ],
+        );
+        expect(
+          parser
+              .parseForRecovery(invalidAddress, metadata: metadata)
+              .failureOrNull
+              ?.code,
+          BleFailureCode.protocolError,
+        );
+      },
+    );
+  });
+
   group('RingOtaPackageParser structure and CRC rejection', () {
     test('rejects short header, magic, format, count and reserved bytes', () {
       _expectRejected(Uint8List(31));
@@ -448,6 +614,17 @@ RingOtaInfo _deviceInfo({
       0,
     ]),
   );
+}
+
+RingOtaRecoveryMetadata _metadataWith(
+  RingOtaRecoveryMetadata metadata,
+  void Function(Map<String, Object?> json) mutate,
+) {
+  final json = Map<String, Object?>.from(metadata.toJson());
+  mutate(json);
+  final decoded = RingOtaRecoveryMetadata.decode(json);
+  expect(decoded.isOk, isTrue);
+  return decoded.valueOrNull!;
 }
 
 Uint8List _package({

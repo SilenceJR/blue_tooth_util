@@ -1,8 +1,8 @@
 # 戒指 BLE OTA 完整实施计划
 
-> 记录日期：2026-08-31  
+> 记录日期：2026-09-01
 > 协议基线：《戒指BLE_OTA_App对接文档》v1.2.1  
-> 状态：B0 至 B6 的 BLE 代码与构建集成已完成；Android Example 启动通过，iPhone 签名安装及双平台真实戒指 OTA 联调仍受外部设备、制品和签名条件阻断
+> 状态：B0 至 B6 的 BLE 代码与构建集成已完成；P0 跨进程恢复包重建契约已实现；Android Example 启动通过，iPhone 签名安装及双平台真实戒指 OTA 联调仍受外部设备、制品和签名条件阻断
 
 ## 1. 目标与边界
 
@@ -63,6 +63,7 @@
 - `RingOtaProtocolAdapter`、`RingOtaSession`：OTA 模式匹配、初始化和传输。B4 已实现单轮正常路径。
 - `RingOtaTransferSnapshot`、`RingOtaTransferResult`：协议确认边界状态和 Bootloader 传输结果。B4 已实现，B5 已增加 ACK 进度限流。
 - `RingOtaUpdateSession`、`RingOtaUpdateSnapshot`、`RingOtaUpdateResult`：B5 已实现跨连接恢复和业务模式最终版本确认。
+- `RingOtaRecoveryMetadata`：P0 已实现版本化、不可变的跨进程恢复摘要；`RingOtaPackage.recoveryMetadata` 只能由已解析包生成，App 通过 `RingOtaRecoveryMetadata.decode()` 和 `RingOtaPackageParser.parseForRecovery()` 重建包。
 
 `RingBleSession.queryOtaInfo()` 和 `enterOtaMode()` 已在 B2 实现。后者只等待设备主动断链并返回 `RingOtaEntryState`，不负责主动断开、重新扫描或 OTA 传输。
 
@@ -108,13 +109,21 @@ B4 已实现步骤 4 至 7 的单轮正常路径，使用 `burst_size = 8` 默�
 
 B5 的自动整轮重试仅覆盖连接/写入/超时、`0x17`、`0x64`、`0x66` 和耗尽 burst 重发的 `0x68`。`0x05`、`0x06`、`0x0C`、`0x10`、`0x65`、`0x6A` 及未知错误直接失败。每一轮都创建新 Session，并从 START_OTA 和第一个分区开始；三轮是包含首次在内的总上限，不保存分区断点。最终扫描同时识别精确 OTA 和业务身份：再次出现 OTA 身份会在剩余轮次内恢复，业务身份则必须由 `0x0402` 返回目标版本才能完成。
 
+#### 3.3.1 P0 跨进程恢复契约
+
+`RingOtaInfo.toPayload()` 对称编码首次业务模式 `0x0402` 的精确 16 字节响应，返回独立防御性副本。已通过完整解析的 `RingOtaPackage` 暴露只读 `recoveryMetadata`，其中仅包含：`schemaVersion`、原始 `0x0402` 16 字节 payload、稳定字符串版本策略、目标固件版本、8 字节产品号、`totalSize`、头 CRC 和分区数量。对象及其字节 getter 均不可变；不包含包对象、分区数据、文件路径、SHA-256、签名结果、ACK、burst 断点、平台 `deviceId` 或“已经验证”标记。
+
+`RingOtaRecoveryMetadata.decode()` 要求 v1 精确字段集合，严格检查字段类型、字节长度、数值范围、未知 schema 和未知版本策略，并再次调用 `RingOtaInfo.fromPayload()`；不会信任 JSON 中展开的产品、版本或能力位。`parseForRecovery()` 先从持久化原始 payload 重建设备信息，再调用完整 `parse()`，重新执行 Bootloader/安全能力、magic、格式、保留位、长度、头 CRC、分区 CRC、地址、重叠、顺序、产品和版本策略门禁，最后逐项比较目标版本、`totalSize`、8 字节产品号、头 CRC 和分区数量；任一差异均返回结构化失败，不提供宽松绕过参数。
+
+进程重启时，App 必须先重新读取固件并校验长度、SHA-256、签名、有效期和更新授权，再解码元数据和调用 `parseForRecovery()`。升级意图、规范化应用模式 MAC、原始固件文件引用和恢复元数据必须在发送 `0x0401` 前原子落盘；不得落盘分区断点。设备已经停留 OTA 模式时，现有 `RingOtaUpdateSession.update(package)` 无需业务 Session、不会发送 `0x0401`，直接扫描精确 OTA Manufacturer Data、从 START_OTA 完整重传；`OTA_COMPLETE` 后仍须重启并通过业务 `0x0402` 确认目标版本。
+
 控制命令超时重发没有协议序号。若重发后可能存在的同码重复 ACK 已在后续不同应答等待期间被消费，会话继续；若到下一条同码控制命令前仍无法证明旧 ACK 已排空，会话不会猜测 ACK 代际，而是要求新连接并从 START_OTA 整轮恢复。
 
 ### 3.4 `universal_ble`
 
 BLE 包已将依赖升级并锁定到 `universal_ble 2.2.0`，约束为 `>=2.2.0 <2.3.0`。B2 在业务协议层增加 `0x0402`、`0x0401`、OTA 信息和身份模型；Adapter、Session 和模型仍不直接导入平台插件。
 
-BLE 包 B5 根包阶段性测试总数为 72 项，其中 OTA Session 与跨连接 Update Session 定向测试 26 项。测试覆盖身份 Adapter、命令字节、MTU/GATT 初始化、burst 与尾包重发、控制超时及迟到/同码 ACK 消歧、多分区、连续 Notify 缓冲、最多三轮 START 恢复、不可重试错误、精确业务身份、最终 `0x0402` 版本门禁、取消、互斥和资源释放，全部使用 fake transport 与合成包。BLE Example widget test、Example iOS Simulator debug 构建和 Android debug APK 构建沿用 B1 证据。完整 App 编译、Android 真机和 iPhone 真机仍是后续验收项。
+BLE 包 B5 根包阶段性测试总数为 72 项；P0 补充 `RingOtaInfo` 精确 payload 往返、恢复 metadata 严格解码/摘要篡改、完整重新解析和无业务 Session 直接 OTA 恢复后，定向测试为 50 项、全量根包测试为 78 项。测试覆盖身份 Adapter、命令字节、MTU/GATT 初始化、burst 与尾包重发、控制超时及迟到/同码 ACK 消歧、多分区、连续 Notify 缓冲、最多三轮 START 恢复、不可重试错误、精确业务身份、最终 `0x0402` 版本门禁、取消、互斥和资源释放，全部使用 fake transport 与合成包。BLE Example widget test、Example iOS Simulator debug 构建和 Android debug APK 构建沿用 B1 证据。完整 App 编译、Android 真机和 iPhone 真机仍是后续验收项。
 
 BLE 业务层只依赖 `BleTransport` 返回的实际 MTU 和顺序 `await write()`，不复制 CoreBluetooth 或 Android GATT 回调。Apple central 模式的高吞吐无响应写仍需 iPhone 真机验证，不能仅凭插件版本或模拟器构建判定流控通过。
 
@@ -181,6 +190,8 @@ App 的详细改动见《APP_CODEX_戒指OTA实施交接》。服务端需提供
 8. Android 与 iPhone 真机联合验收。
 9. 安全门槛全部通过后启用生产升级。
 
+P0 在 B6 之后作为独立修复阶段完成跨进程恢复包重建，仍遵循“只读协议/调用链分析 → 主任务实现 → 测试代理 → 主任务复核 → 只读 Reviewer → 独立提交”。P0 不改变 OTA 传输状态机，不新增分区断点恢复，也不实现 App 下载、页面或 GetX Coordinator。
+
 ## 7. 验收场景
 
 - 普通 BLE 扫描、连接、Notify 和业务命令无回归。
@@ -188,6 +199,8 @@ App 的详细改动见《APP_CODEX_戒指OTA实施交接》。服务端需提供
 - 非法包在发送 `0x0401` 前被拒绝。
 - Android 和 iPhone 均使用实际 MTU 正确分包。
 - 杀进程、关闭蓝牙、断电、拿远和低电量后可恢复。
+- 进程重启且设备已停留 OTA 模式时，App 可用重新校验的原始固件和恢复元数据重建包；不要求业务 Session、不发送 `0x0401`，从 START_OTA 完整重传。
+- 恢复元数据未知 schema、缺失字段、错类型、未知策略、非法 16 字节 `0x0402` payload 或摘要篡改都会被拒绝。
 - 发 START_OTA 前等待三分钟能回业务模式。
 - 发 START_OTA 后等待三分钟仍能回到 OTA 模式。
 - OTA_COMPLETE 后只有业务模式 `0x0402` 版本匹配才显示成功。

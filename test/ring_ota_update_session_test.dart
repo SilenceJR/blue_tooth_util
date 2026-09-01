@@ -8,6 +8,40 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   group('RingOtaUpdateSession', () {
     test(
+      'connects the exact OTA target before creating any business session',
+      () async {
+        final identity = RingDeviceIdentity.fromMac('01:02:03:04:05:06');
+        final transport = _UpdateTransport(
+          scanBatches: [
+            [_otaDevice(identity, 'ota-target')],
+          ],
+        );
+        final update = _updateSession(transport, identity);
+        final startWritten = Completer<void>();
+        transport.onWrite = (write) {
+          if (write.characteristicId ==
+                  RingOtaProtocol.commandCharacteristicUuid &&
+              write.value.first == 0x01 &&
+              !startWritten.isCompleted) {
+            startWritten.complete();
+          }
+        };
+        addTearDown(() async {
+          await update.dispose();
+          await transport.close();
+        });
+
+        final pending = update.update(_testPackage());
+        await startWritten.future;
+
+        expect(transport.connects, ['ota-target']);
+        expect(transport.applicationCommands, isEmpty);
+        update.cancel();
+        expect((await pending).failureOrNull?.code, BleFailureCode.cancelled);
+      },
+    );
+
+    test(
       'ignores candidate lookalikes and completes only after exact application 0x0402 confirmation',
       () async {
         final identity = RingDeviceIdentity.fromMac('01:02:03:04:05:06');
@@ -200,6 +234,50 @@ void main() {
         expect(transport.otaStartWrites, 3);
         expect(transport.startScanCount, 3);
         expect(transport.connects, ['ota-target', 'ota-target', 'ota-target']);
+        expect(transport.applicationCommands, isEmpty);
+      },
+    );
+
+    test(
+      'replays complete START rounds when OTA reappears after OTA_COMPLETE',
+      () async {
+        final identity = RingDeviceIdentity.fromMac('01:02:03:04:05:06');
+        final transport = _UpdateTransport(
+          scanBatches: List<List<BleScanDevice>>.generate(
+            6,
+            (_) => [_otaDevice(identity, 'ota-target')],
+          ),
+        );
+        final update = _updateSession(transport, identity);
+        _wireOtaTransfer(
+          transport,
+          onApplicationOtaInfo: () => fail(
+            'an OTA-mode rediscovery must recover instead of querying business 0x0402',
+          ),
+        );
+        addTearDown(() async {
+          await update.dispose();
+          await transport.close();
+        });
+
+        final result = await update.update(_testPackage());
+
+        expect(result.failureOrNull?.code, BleFailureCode.connectionFailed);
+        expect(
+          transport.otaStartWrites,
+          RingOtaUpdateSession.maxTransferRounds,
+        );
+        expect(
+          transport.startScanCount,
+          RingOtaUpdateSession.maxTransferRounds * 2,
+        );
+        expect(
+          transport.connects,
+          List<String>.filled(
+            RingOtaUpdateSession.maxTransferRounds,
+            'ota-target',
+          ),
+        );
         expect(transport.applicationCommands, isEmpty);
       },
     );

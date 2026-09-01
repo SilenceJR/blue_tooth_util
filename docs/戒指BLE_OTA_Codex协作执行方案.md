@@ -1,7 +1,7 @@
 # 戒指 BLE OTA Codex 协作执行方案
 
-> 记录日期：2026-08-31
-> 状态：BLE B0 至 B6 代码与构建集成已完成；Android 容器启动已有证据，iPhone 签名和双平台真实 OTA 仍为跨仓联调门禁
+> 记录日期：2026-09-01
+> 状态：BLE B0 至 B6 代码与构建集成已完成；P0 跨进程恢复包重建契约已实现；Android 容器启动已有证据，iPhone 签名和双平台真实 OTA 仍为跨仓联调门禁
 
 ## 1. 目录和仓库边界
 
@@ -151,11 +151,26 @@ BLE 配置同样将 spawned-agent threads 上限设置为 2，但执行规则仍
 5. 单独提交断连、重试、恢复、进度限流和最终版本确认。
 6. 单独提交 Android/iOS 构建集成结果和 Android/iPhone 真机联调证据；没有设备证据时明确标记未验证，不用构建结果替代。
 
-B6 实际完成 Android APK、iOS Simulator 和 iPhoneOS no-codesign 构建，并在 Pixel 8 Pro 启动 Example。iPhone 可见但受本机签名账户/描述文件阻断；没有目标戒指和受控 `.rota`，未执行真实 OTA。App 集成任务只能依赖 B5 已验证的公开 API，仍须自行完成 Android/iPhone 的业务扫描、MTU、WNR、断连恢复和最终版本确认验收。
+P0. 单独提交跨进程恢复契约：严格 v1 `RingOtaRecoveryMetadata`、`RingOtaInfo.toPayload()`、
+`RingOtaPackage.recoveryMetadata` 和 `parseForRecovery()`；重新解析完整 `.rota`，不保存分区断点，
+不新增 OTA 传输状态机。
+
+B6 实际完成 Android APK、iOS Simulator 和 iPhoneOS no-codesign 构建，并在 Pixel 8 Pro 启动 Example。iPhone 可见但受本机签名账户/描述文件阻断；没有目标戒指和受控 `.rota`，未执行真实 OTA。App 集成任务只能依赖已验证的 B5/P0 公开 API，仍须自行完成 Android/iPhone 的业务扫描、MTU、WNR、断连恢复和最终版本确认验收。
 
 每个功能阶段串行执行：只读协议或调用链分析、主任务实现、测试代理补充测试、主任务复核 diff、只读 Reviewer 审查、提交。每阶段报告公开 API、commit ID、测试、构建、真机边界、文档状态和 App 可依赖内容。
 
+P0 阶段明确执行：只读协议/调用链分析 → 主任务实现 → `otaTestEngineer` 仅修改指定
+测试文件 → 主任务复核 diff → `otaReviewer` 只读审查 → 单独提交。测试和审查代理一次
+只运行一个，均不得修改 App 仓库；测试使用合成包，不提交真实 `.rota`、密钥或产线资料。
+
 BLE 阶段完成前，App 可以审查页面和网络入口，但不能围绕猜测接口编写兼容层。
+
+P0 恢复修复作为 B6 之后的独立 BLE 阶段：`RingOtaInfo.toPayload()`、
+`RingOtaRecoveryMetadata`、`RingOtaPackage.recoveryMetadata` 和
+`RingOtaPackageParser.parseForRecovery()` 由 BLE 主任务维护；App 只解码摘要、重新校验
+固件并调用公开 API，不接触私有包/分区构造器。该阶段不改变 B5 的更新状态机：设备已处于
+OTA 模式时仍由 `RingOtaUpdateSession.update(package)` 直接从 START_OTA 完整重传，
+不要求业务 Session、不发送 `0x0401`，并在 `OTA_COMPLETE` 后通过业务 `0x0402` 确认。
 
 ### 阶段 C：App 集成
 
@@ -217,12 +232,17 @@ BLE 阶段完成前，App 可以审查页面和网络入口，但不能围绕猜
 4. RingOtaProtocolAdapter、RingOtaSession 和迭代状态机；
 5. 断连、重试、恢复、进度限流和最终版本确认；
 6. Android/iOS 构建和 Android/iPhone 真机联调证据。
+7. 跨进程恢复契约：`RingOtaInfo.toPayload()`、`RingOtaRecoveryMetadata`、
+   `RingOtaPackage.recoveryMetadata` 和 `parseForRecovery()`；不保存分区断点，不新增传输状态机。
 
 约束：
 - 不实现 App 页面、网络下载、GetX Coordinator 或服务端接口；
 - 不提交真实 rota、ota_tool.py、密钥或产线资料；
 - Service/名称只筛选候选设备，Manufacturer Data 派生 MAC 才确认目标；
 - OTA_COMPLETE 后必须重连业务模式并由 0x0402 核验版本；
+- 恢复 metadata 只保存版本化设备原始 0x0402 payload 和包摘要；decode 严格拒绝未知字段/策略/类型，parseForRecovery 必须复用完整解析和全部门禁；
+- 元数据不是签名或来源证明，App 必须重新校验 SHA-256、签名、有效期和授权，并在 0x0401 前原子落盘升级意图、规范化应用 MAC、原始文件引用和 metadata；
+- 设备已处于 OTA 模式时 update(package) 直接扫描并从 START_OTA 完整重传，不先要业务 Session、不发送 0x0401；
 - 不递归重试，不逐包向 UI 发事件，不为未确认协议写版本分支兼容层；
 - 涉及 AES-CCM 格式、原生后台服务或公开 API 大改时停止编码，先提交方案。
 
@@ -240,7 +260,7 @@ BLE 阶段完成前，App 可以审查页面和网络入口，但不能围绕猜
 ### 8.2 测试
 
 ```text
-你是 otaTestEngineer，使用 gpt-5.6-terra high。只拥有主 Codex 指定的测试文件和测试夹具，不修改生产代码。根据公开行为补充 rota 解析、错误包、身份派生、状态转换、重试上限和中断恢复测试。使用合成数据，不提交真实 rota。先运行定向测试，再报告覆盖场景、命令、失败证据和未覆盖的真机边界。
+你是 otaTestEngineer，使用 gpt-5.6-terra high。只拥有主 Codex 指定的测试文件和测试夹具，不修改生产代码。根据公开行为补充 rota 解析、错误包、身份派生、状态转换、重试上限和中断恢复测试；P0 还必须覆盖 `RingOtaInfo.toPayload()` 精确往返、恢复 metadata 严格解码与摘要篡改、无业务 Session 直接 OTA 和完整 START_OTA 重传。使用合成数据，不提交真实 rota。先运行定向测试，再报告覆盖场景、命令、失败证据和未覆盖的真机边界。
 ```
 
 ### 8.3 只读审查

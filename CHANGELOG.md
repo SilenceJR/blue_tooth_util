@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- 增加版本化不可变的 `RingOtaRecoveryMetadata`、`RingOtaPackage.recoveryMetadata` 和
+  `RingOtaPackageParser.parseForRecovery()`；进程重启后可用首次 `0x0402` 原始 16 字节
+  payload 安全重建包，并重新执行全部格式、能力、产品、版本、地址和 CRC 门禁。
+- `RingOtaInfo.toPayload()` 支持 `0x0402` 信息精确往返；恢复元数据不包含分区数据或断点，
+  也不证明固件来源或签名，App 仍须重新校验文件长度、SHA-256、签名、有效期和授权。
 - 将 `universal_ble` 升级到 `>=2.2.0 <2.3.0`，保持插件依赖位于 Transport 层。
 - 补充普通 BLE Transport 回归，覆盖扫描映射、实际 MTU、服务发现、Notify 和两种写入模式。
 - 增加 `RingOtaInfo`、`RingDeviceIdentity`、`0x0402` 查询和 `0x0401` 进入 OTA 模式的协议基础。

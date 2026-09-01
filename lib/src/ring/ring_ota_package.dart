@@ -17,6 +17,207 @@ enum RingOtaVersionPolicy {
   sameVersionRecovery,
 }
 
+/// 跨进程恢复所需的、版本化的 OTA 包摘要。
+///
+/// 该对象只证明恢复文件与首次 `0x0402` 设备信息和包摘要一致，不证明文件
+/// 来源、签名或内容真实性。调用方仍须在恢复前重新校验文件长度、SHA-256、
+/// 签名、有效期和授权。
+final class RingOtaRecoveryMetadata {
+  /// 持久化 JSON schema 版本。
+  static const int schemaVersion = 1;
+
+  RingOtaRecoveryMetadata._({
+    required Uint8List deviceOtaInfoPayload,
+    required this.versionPolicy,
+    required this.firmwareVersion,
+    required Uint8List productBytes,
+    required this.totalSize,
+    required this.headerChecksum,
+    required this.partitionCount,
+  }) : _deviceOtaInfoPayload = Uint8List.fromList(deviceOtaInfoPayload),
+       _productBytes = Uint8List.fromList(productBytes);
+
+  final Uint8List _deviceOtaInfoPayload;
+  final Uint8List _productBytes;
+
+  /// 首次业务模式 `0x0402` 的精确 16 字节 payload 副本。
+  Uint8List get deviceOtaInfoPayload =>
+      Uint8List.fromList(_deviceOtaInfoPayload);
+
+  /// 解析后的稳定版本策略。
+  final RingOtaVersionPolicy versionPolicy;
+
+  /// `.rota` 目标固件版本。
+  final int firmwareVersion;
+
+  /// `.rota` 固定 8 字节产品号副本。
+  Uint8List get productBytes => Uint8List.fromList(_productBytes);
+
+  /// `.rota` 全部分区数据总长度。
+  final int totalSize;
+
+  /// `.rota` 头部与分区表 CRC16。
+  final int headerChecksum;
+
+  /// `.rota` 分区数量。
+  final int partitionCount;
+
+  /// 编码为稳定的 v1 JSON Map；每次调用返回独立容器。
+  Map<String, Object?> toJson() => {
+    'schemaVersion': RingOtaRecoveryMetadata.schemaVersion,
+    'deviceOtaInfo': _deviceOtaInfoPayload.toList(),
+    'versionPolicy': _versionPolicyToWire(versionPolicy),
+    'firmwareVersion': firmwareVersion,
+    'product': _productBytes.toList(),
+    'totalSize': totalSize,
+    'headerChecksum': headerChecksum,
+    'partitionCount': partitionCount,
+  };
+
+  /// 解码严格版本化的恢复 JSON。
+  ///
+  /// 缺失字段、未知字段、类型/范围错误、未知 schema 或策略均返回失败。
+  /// `deviceOtaInfo` 会再次经过 [RingOtaInfo.fromPayload] 的完整 16 字节校验。
+  static Result<RingOtaRecoveryMetadata, BleFailure> decode(
+    Map<String, Object?> json,
+  ) {
+    try {
+      const keys = {
+        'schemaVersion',
+        'deviceOtaInfo',
+        'versionPolicy',
+        'firmwareVersion',
+        'product',
+        'totalSize',
+        'headerChecksum',
+        'partitionCount',
+      };
+      if (json.length != keys.length || !json.keys.every(keys.contains)) {
+        _rejectMetadata('Recovery metadata contains missing or unknown fields');
+      }
+
+      final schema = _readInt(json, 'schemaVersion', min: 0, max: 0x7FFFFFFF);
+      if (schema != RingOtaRecoveryMetadata.schemaVersion) {
+        _rejectMetadata(
+          'Unsupported recovery metadata schema: $schema',
+          unsupported: true,
+        );
+      }
+      final infoPayload = _readBytes(json, 'deviceOtaInfo', length: 16);
+      try {
+        RingOtaInfo.fromPayload(infoPayload);
+      } on FormatException catch (error) {
+        _rejectMetadata(
+          'Recovery metadata deviceOtaInfo is invalid',
+          cause: error,
+        );
+      }
+
+      final policyValue = json['versionPolicy'];
+      if (policyValue is! String) {
+        _rejectMetadata('Recovery metadata versionPolicy must be a string');
+      }
+      final policy = switch (policyValue) {
+        'normal_upgrade' => RingOtaVersionPolicy.normalUpgrade,
+        'same_version_recovery' => RingOtaVersionPolicy.sameVersionRecovery,
+        _ => null,
+      };
+      if (policy == null) {
+        _rejectMetadata(
+          'Unknown recovery metadata versionPolicy: $policyValue',
+          unsupported: true,
+        );
+      }
+
+      final product = _readBytes(json, 'product', length: 8);
+      return Result.ok(
+        RingOtaRecoveryMetadata._(
+          deviceOtaInfoPayload: infoPayload,
+          versionPolicy: policy,
+          firmwareVersion: _readInt(
+            json,
+            'firmwareVersion',
+            min: 0,
+            max: 0xFFFFFFFF,
+          ),
+          productBytes: product,
+          totalSize: _readInt(json, 'totalSize', min: 1, max: 0xFFFFFFFF),
+          headerChecksum: _readInt(json, 'headerChecksum', min: 0, max: 0xFFFF),
+          partitionCount: _readInt(json, 'partitionCount', min: 1, max: 32),
+        ),
+      );
+    } on _RingOtaMetadataFailure catch (failure) {
+      return Result.err(failure.failure);
+    } catch (error) {
+      return Result.err(
+        BleFailure(
+          code: BleFailureCode.protocolError,
+          message: 'Unable to decode OTA recovery metadata',
+          cause: error,
+        ),
+      );
+    }
+  }
+
+  static int _readInt(
+    Map<String, Object?> json,
+    String key, {
+    required int min,
+    required int max,
+  }) {
+    final value = json[key];
+    if (value is! int || value < min || value > max) {
+      _rejectMetadata('Recovery metadata $key must be an integer in range');
+    }
+    return value;
+  }
+
+  static Uint8List _readBytes(
+    Map<String, Object?> json,
+    String key, {
+    required int length,
+  }) {
+    final value = json[key];
+    if (value is! List ||
+        value.length != length ||
+        value.any((item) => item is! int || item < 0 || item > 0xFF)) {
+      _rejectMetadata(
+        'Recovery metadata $key must contain exactly $length byte integers',
+      );
+    }
+    return Uint8List.fromList(value.cast<int>());
+  }
+
+  static String _versionPolicyToWire(RingOtaVersionPolicy policy) =>
+      switch (policy) {
+        RingOtaVersionPolicy.normalUpgrade => 'normal_upgrade',
+        RingOtaVersionPolicy.sameVersionRecovery => 'same_version_recovery',
+      };
+
+  static Never _rejectMetadata(
+    String message, {
+    bool unsupported = false,
+    Object? cause,
+  }) {
+    throw _RingOtaMetadataFailure(
+      BleFailure(
+        code: unsupported
+            ? BleFailureCode.unsupported
+            : BleFailureCode.protocolError,
+        message: message,
+        cause: cause,
+      ),
+    );
+  }
+}
+
+/// 恢复元数据结构错误的内部异常。
+class _RingOtaMetadataFailure implements Exception {
+  const _RingOtaMetadataFailure(this.failure);
+
+  final BleFailure failure;
+}
+
 /// `.rota` 中的一条分区记录及其数据。
 class RingOtaPartition {
   RingOtaPartition._({
@@ -58,7 +259,12 @@ class RingOtaPackage {
     required this.product,
     required this.headerChecksum,
     required List<RingOtaPartition> partitions,
+    required Uint8List recoveryDeviceOtaInfoPayload,
+    required this._recoveryVersionPolicy,
   }) : _productBytes = Uint8List.fromList(productBytes),
+       _recoveryDeviceOtaInfoPayload = Uint8List.fromList(
+         recoveryDeviceOtaInfoPayload,
+       ),
        partitions = UnmodifiableListView(partitions);
 
   /// 包内目标固件版本，编码与 `0x0402.fw_version` 相同。
@@ -75,11 +281,25 @@ class RingOtaPackage {
   /// 包头与分区表 CRC16。
   final int headerChecksum;
 
+  final Uint8List _recoveryDeviceOtaInfoPayload;
+  final RingOtaVersionPolicy _recoveryVersionPolicy;
+
   /// 分区原始顺序，不允许调用方重排此列表。
   final UnmodifiableListView<RingOtaPartition> partitions;
 
   /// 固定 8 字节产品标识的防御性副本。
   Uint8List get productBytes => Uint8List.fromList(_productBytes);
+
+  /// 首次解析时绑定的跨进程恢复摘要。
+  RingOtaRecoveryMetadata get recoveryMetadata => RingOtaRecoveryMetadata._(
+    deviceOtaInfoPayload: _recoveryDeviceOtaInfoPayload,
+    versionPolicy: _recoveryVersionPolicy,
+    firmwareVersion: firmwareVersion,
+    productBytes: _productBytes,
+    totalSize: totalSize,
+    headerChecksum: headerChecksum,
+    partitionCount: partitions.length,
+  );
 }
 
 /// `.rota v1` 解析器。
@@ -120,6 +340,38 @@ class RingOtaPackageParser {
         ),
       );
     }
+  }
+
+  /// 使用持久化的首次 `0x0402` 信息和包摘要重新验证并重建 OTA 包。
+  ///
+  /// 此方法始终先重建 [RingOtaInfo] 并调用完整 [parse]，不会跳过产品、版本、
+  /// 安全能力、CRC、地址或长度门禁，也不会恢复分区断点。
+  Result<RingOtaPackage, BleFailure> parseForRecovery(
+    Uint8List bytes, {
+    required RingOtaRecoveryMetadata metadata,
+  }) {
+    late final RingOtaInfo deviceInfo;
+    try {
+      deviceInfo = RingOtaInfo.fromPayload(metadata.deviceOtaInfoPayload);
+    } on FormatException catch (error) {
+      return Result.err(
+        BleFailure(
+          code: BleFailureCode.protocolError,
+          message: 'Recovery metadata contains invalid OTA info payload',
+          cause: error,
+        ),
+      );
+    }
+    final parsed = parse(
+      bytes,
+      deviceInfo: deviceInfo,
+      versionPolicy: metadata.versionPolicy,
+    );
+    if (parsed case Err(:final error)) return Result.err(error);
+    final package = parsed.valueOrNull!;
+    final mismatch = _recoveryMismatch(package, metadata);
+    if (mismatch != null) return Result.err(mismatch);
+    return Result.ok(package);
   }
 
   RingOtaPackage _parse(
@@ -241,7 +493,46 @@ class RingOtaPackageParser {
       product: product,
       headerChecksum: headerChecksum,
       partitions: partitions,
+      recoveryDeviceOtaInfoPayload: deviceInfo.toPayload(),
+      recoveryVersionPolicy: versionPolicy,
     );
+  }
+
+  BleFailure? _recoveryMismatch(
+    RingOtaPackage package,
+    RingOtaRecoveryMetadata metadata,
+  ) {
+    if (package.firmwareVersion != metadata.firmwareVersion) {
+      return const BleFailure(
+        code: BleFailureCode.protocolError,
+        message: 'Recovery metadata firmwareVersion does not match package',
+      );
+    }
+    if (package.totalSize != metadata.totalSize) {
+      return const BleFailure(
+        code: BleFailureCode.protocolError,
+        message: 'Recovery metadata totalSize does not match package',
+      );
+    }
+    if (!_bytesEqual(package.productBytes, metadata.productBytes)) {
+      return const BleFailure(
+        code: BleFailureCode.protocolError,
+        message: 'Recovery metadata product does not match package',
+      );
+    }
+    if (package.headerChecksum != metadata.headerChecksum) {
+      return const BleFailure(
+        code: BleFailureCode.protocolError,
+        message: 'Recovery metadata headerChecksum does not match package',
+      );
+    }
+    if (package.partitions.length != metadata.partitionCount) {
+      return const BleFailure(
+        code: BleFailureCode.protocolError,
+        message: 'Recovery metadata partitionCount does not match package',
+      );
+    }
+    return null;
   }
 
   void _validateDeviceCapabilities(RingOtaInfo deviceInfo) {
