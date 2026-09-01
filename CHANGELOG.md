@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- 文档同步：记录 `0x0401` / `0x0402` 在上游《BLE协议.md》的 §4.14 / §4.15 位置，以及
+  固件方提供的 `0x0402` 原始帧 CRC 与当前 CRC16/MODBUS 编码器不一致的阻断项；OTA Service
+  数据帧仍不纳入通用业务协议。
 - 增加版本化不可变的 `RingOtaRecoveryMetadata`、`RingOtaPackage.recoveryMetadata` 和
   `RingOtaPackageParser.parseForRecovery()`；进程重启后可用首次 `0x0402` 原始 16 字节
   payload 安全重建包，并重新执行全部格式、能力、产品、版本、地址和 CRC 门禁。
