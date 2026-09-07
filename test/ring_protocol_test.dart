@@ -370,6 +370,120 @@ void main() {
     );
   });
 
+  group('Custom zikr and daily report models', () {
+    test('accepts active, cleared and completed custom zikr states', () {
+      final active = RingCustomZikrState.fromPayload(
+        Uint8List.fromList([1, 5, 0, 33, 0]),
+      );
+      final cleared = RingCustomZikrState.fromPayload(
+        Uint8List.fromList([0, 0, 0, 0, 0]),
+      );
+      final completed = RingCustomZikrState.fromPayload(
+        Uint8List.fromList([0, 33, 0, 33, 0]),
+      );
+
+      expect(active.active, isTrue);
+      expect(active.count, 5);
+      expect(active.target, 33);
+      expect(active.isCompleted, isFalse);
+      expect(cleared.isCompleted, isFalse);
+      expect(completed.isCompleted, isTrue);
+      expect(active.toPayload(), [1, 5, 0, 33, 0]);
+    });
+
+    test('rejects malformed custom state and event payloads', () {
+      expect(
+        () => RingCustomZikrState.fromPayload(Uint8List(4)),
+        throwsFormatException,
+      );
+      expect(
+        () => RingCustomZikrState.fromPayload(
+          Uint8List.fromList([0, 5, 0, 33, 0]),
+        ),
+        throwsFormatException,
+      );
+      expect(
+        () => RingCustomZikrState.fromPayload(
+          Uint8List.fromList([1, 33, 0, 33, 0]),
+        ),
+        throwsFormatException,
+      );
+      expect(
+        () => RingCustomZikrEvent.fromPayload(
+          Uint8List.fromList([0, 1, 0, 33, 0]),
+        ),
+        throwsFormatException,
+      );
+      expect(
+        () => RingCustomZikrEvent.fromPayload(
+          Uint8List.fromList([1, 33, 0, 33, 0]),
+        ),
+        throwsFormatException,
+      );
+    });
+
+    test('parses progress and completion events with exact five bytes', () {
+      final progress = RingCustomZikrEvent.fromPayload(
+        Uint8List.fromList([1, 5, 0, 33, 0]),
+      );
+      final completion = RingCustomZikrEvent.fromPayload(
+        Uint8List.fromList([2, 33, 0, 33, 0]),
+      );
+
+      expect(progress.isProgress, isTrue);
+      expect(progress.count, 5);
+      expect(completion.isCompleted, isTrue);
+      expect(completion.count, completion.target);
+    });
+
+    test('separates strict 52-byte daily data from the 13-byte batch end', () {
+      final dayPayload = Uint8List(52)
+        ..[0] = 1
+        ..[1] = 26
+        ..[2] = 9
+        ..[3] = 4
+        ..[4] = 7;
+      final day = RingZikrDay.fromPayload(dayPayload);
+      final end = RingZikrBatchEnd.fromPayload(
+        Uint8List.fromList([
+          2,
+          0,
+          0,
+          0,
+          0x78,
+          0x56,
+          0x34,
+          0x12,
+          0xEF,
+          0xCD,
+          0xAB,
+          0x90,
+          1,
+        ]),
+      );
+
+      expect(day.date, DateTime.utc(2026, 9, 4));
+      expect(day.hourlyCounts.first, 7);
+      expect(end.sentAt, 0x12345678);
+      expect(end.previousSentAt, 0x90ABCDEF);
+      expect(end.dayCount, 1);
+      expect(
+        () => RingZikrDay.fromPayload(Uint8List(53)),
+        throwsFormatException,
+      );
+      expect(
+        () => RingZikrBatchEnd.fromPayload(Uint8List(12)),
+        throwsFormatException,
+      );
+      expect(
+        () => RingZikrBatchEnd.fromPayload(
+          Uint8List.fromList([0, 0, 0, 0, ...List<int>.filled(9, 0)]),
+        ),
+        throwsFormatException,
+      );
+    });
+  });
+
   group('RingBleSession', () {
     test(
       'connect initialization follows mtu discover subscribe order',
@@ -499,6 +613,35 @@ void main() {
     );
 
     test(
+      'accepts an OTA disconnect that interrupts the GATT write callback',
+      () async {
+        final transport = FakeBleTransport();
+        final writeResult = Completer<Result<void, BleFailure>>();
+        transport.pendingWriteResult = writeResult.future;
+        final session = RingBleSession(device: _device(), transport: transport);
+        await session.initialize();
+
+        final future = session.enterOtaMode();
+        await Future<void>.delayed(Duration.zero);
+        transport.emitConnection(false);
+        await Future<void>.delayed(Duration.zero);
+        writeResult.complete(
+          const Result.err(
+            BleFailure(
+              code: BleFailureCode.writeFailed,
+              message: 'Device Disconnected',
+            ),
+          ),
+        );
+
+        expect(
+          (await future).valueOrNull,
+          RingOtaEntryState.deviceDisconnected,
+        );
+      },
+    );
+
+    test(
       'rejects duplicate OTA entry while the first request is pending',
       () async {
         final transport = FakeBleTransport();
@@ -574,6 +717,31 @@ void main() {
       expect(result.valueOrNull, RingScreenDirection.normal);
     });
 
+    test('find ring DONE completes start and stop pending frames', () async {
+      final transport = FakeBleTransport();
+      final session = RingBleSession(device: _device(), transport: transport);
+      await session.initialize();
+
+      final start = session.startFindRing();
+      await Future<void>.delayed(Duration.zero);
+      final stop = session.stopFindRing();
+      await Future<void>.delayed(Duration.zero);
+      expect(transport.writes, hasLength(2));
+      expect(transport.writes.first, contains('0B 01'));
+      expect(transport.writes.last, contains('01 00 01 00 02'));
+
+      var startCompleted = false;
+      var stopCompleted = false;
+      final startResult = start.whenComplete(() => startCompleted = true);
+      final stopResult = stop.whenComplete(() => stopCompleted = true);
+      transport.emit(RingCommand.findRing, const [2]);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(startCompleted, isTrue);
+      expect(stopCompleted, isTrue);
+      await Future.wait([startResult, stopResult]);
+    });
+
     test('queries button count, direction and prayer reminders', () async {
       final transport = FakeBleTransport();
       final session = RingBleSession(device: _device(), transport: transport);
@@ -600,6 +768,101 @@ void main() {
       ]);
       // final reminders = (await remindersFuture).valueOrNull;
       // expect(reminders?.single.timeText, '08:30');
+    });
+
+    test(
+      'serializes custom zikr operations and requires exact query state',
+      () async {
+        final transport = FakeBleTransport();
+        final session = RingBleSession(device: _device(), transport: transport);
+        await session.initialize();
+
+        final enter = session.enterCustomZikr(33);
+        final query = session.queryCustomZikr();
+        await Future<void>.delayed(Duration.zero);
+        expect(transport.writes, hasLength(1));
+        expect(transport.writes.single, contains('11 01'));
+
+        // A late one-byte ACK from the previous operation cannot complete the
+        // five-byte query; the first operation is still the only pending one.
+        transport.emit(RingCommand.customZikrMode, const [1]);
+        expect((await enter).isOk, isTrue);
+        await Future<void>.delayed(Duration.zero);
+        expect(transport.writes, hasLength(2));
+
+        var queryCompleted = false;
+        query.then((_) => queryCompleted = true);
+        transport.emit(RingCommand.customZikrMode, const [1]);
+        await Future<void>.delayed(Duration.zero);
+        expect(queryCompleted, isFalse);
+
+        transport.emit(RingCommand.customZikrMode, const [1, 5, 0, 33, 0]);
+        final state = await query;
+        expect(state.valueOrNull?.active, isTrue);
+        expect(state.valueOrNull?.count, 5);
+        expect(state.valueOrNull?.target, 33);
+      },
+    );
+
+    test(
+      'validates custom target before writing and keeps device errors',
+      () async {
+        final transport = FakeBleTransport();
+        final session = RingBleSession(device: _device(), transport: transport);
+        await session.initialize();
+
+        expect(
+          (await session.enterCustomZikr(0)).failureOrNull?.code,
+          BleFailureCode.protocolError,
+        );
+        expect(
+          (await session.enterCustomZikr(10000)).failureOrNull?.code,
+          BleFailureCode.protocolError,
+        );
+        expect(transport.writes, isEmpty);
+
+        final query = session.queryCustomZikr();
+        await Future<void>.delayed(Duration.zero);
+        transport.emit(RingCommand.customZikrMode, const [0xFF, 0x02]);
+        final result = await query;
+        expect(result.failureOrNull?.code, BleFailureCode.deviceError);
+        expect(result.failureOrNull?.cause, RingDeviceError.unknownCommand);
+      },
+    );
+
+    test('dispatches custom events and batch end independently', () async {
+      final transport = FakeBleTransport();
+      final session = RingBleSession(device: _device(), transport: transport);
+      await session.initialize();
+      final events = <RingCustomZikrEvent>[];
+      final batches = <RingZikrBatchEnd>[];
+      final eventSubscription = session.customZikrEventStream.listen(
+        events.add,
+      );
+      final batchSubscription = session.zikrBatchEndStream.listen(batches.add);
+
+      transport.emit(RingCommand.customZikrReport, const [1, 5, 0, 33, 0]);
+      transport.emit(RingCommand.zikrHourlyReport, const [
+        2,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+      ]);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(events.single.count, 5);
+      expect(batches.single.dayCount, 0);
+      await eventSubscription.cancel();
+      await batchSubscription.cancel();
     });
 
     test('screen off time separates command ack and active report', () async {
@@ -704,6 +967,7 @@ class FakeBleTransport implements BleTransport {
   final calls = <String>[];
   final writes = <String>[];
   bool failWrites = false;
+  Future<Result<void, BleFailure>>? pendingWriteResult;
 
   final _codec = const RingFrameCodec();
 
@@ -808,6 +1072,8 @@ class FakeBleTransport implements BleTransport {
     bool withoutResponse = false,
   }) async {
     writes.add(bytesToHex(value));
+    final pendingWriteResult = this.pendingWriteResult;
+    if (pendingWriteResult != null) return pendingWriteResult;
     if (failWrites) {
       return const Result.err(
         BleFailure(code: BleFailureCode.writeFailed, message: 'boom'),

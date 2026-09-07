@@ -15,6 +15,7 @@ Sublinur 的 BLE 协议包。包内负责扫描、连接、GATT 传输、协议�
 ## 协议文档
 
 - [BLE 协议 App 对接实现版](docs/BLE协议_App对接_实现版.md)
+- [戒指自定义赞念模式 App 对接文档](docs/戒指_自定义赞念模式_App对接文档.md)
 - [戒指 BLE OTA App 对接文档](docs/戒指BLE_OTA_App对接文档.md)
 - [戒指 BLE OTA 完整实施计划](docs/戒指BLE_OTA_完整实施计划.md)
 - [App Codex 戒指 OTA 实施交接](docs/APP_CODEX_戒指OTA实施交接.md)
@@ -29,6 +30,12 @@ Sublinur 的 BLE 协议包。包内负责扫描、连接、GATT 传输、协议�
 - UI 禁用用于改善交互，不能代替 Session 层的互斥和状态校验。
 - iOS 的平台设备标识不能代替戒指 Manufacturer Data 身份。
 - 真实固件、产线密钥、AES IV 和服务端私钥不得提交到本包。
+
+自定义赞念（协议 v1.1.7）由 `RingBleSession` 提供严格校验的
+`enterCustomZikr`、`exitCustomZikr`、`queryCustomZikr` 以及状态/事件流；
+主 App 的 `BlueToothServer` 负责连接生命周期、重连对账、显式结束、忙状态和
+本地任务元数据。页面返回、后台或进程终止不发送退出命令；没有可验证的本地任务
+元数据时只显示通用“自定义赞念”。
 
 ## 验证
 

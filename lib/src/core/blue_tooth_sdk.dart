@@ -3,10 +3,10 @@ import 'dart:async';
 import 'package:common/common.dart';
 
 import '../common/ble_failure.dart';
-import '../ring/ring_protocol.dart';
-import '../ring/ring_protocol_adapter.dart';
 import '../ring/ring_models.dart';
 import '../ring/ring_ota_update_session.dart';
+import '../ring/ring_protocol.dart';
+import '../ring/ring_protocol_adapter.dart';
 import 'ble_protocol_adapter.dart';
 import 'ble_scan_device.dart';
 import 'ble_session.dart';
@@ -75,7 +75,7 @@ class BlueToothSdk {
   Future<Result<void, BleFailure>> startScan({
     bool unfiltered = false,
     List<String> serviceIds = const [RingProtocol.serviceUuid],
-    List<String> namePrefixes = const [RingProtocol.deviceName, 'Zikr'],
+    List<String> namePrefixes = const [RingProtocol.deviceName],
   }) {
     return _transport.startScan(
       BleScanOptions(
