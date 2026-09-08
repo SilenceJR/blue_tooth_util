@@ -235,13 +235,16 @@ class RingBleSession implements BleSession {
   /// 进入自定义赞念模式并把计数从 0 开始。
   ///
   /// [target] 必须为 1~9999。成功响应必须精确为单字节 `0x01`。
-  Future<Result<void, BleFailure>> enterCustomZikr(int target) {
-    if (target < 1 || target > 9999) {
+  Future<Result<void, BleFailure>> enterCustomZikr(
+    int target, {
+    required int taskId,
+  }) {
+    if (target < 1 || target > 9999 || taskId < 0 || taskId > 65535) {
       return Future.value(
         const Result.err(
           BleFailure(
             code: BleFailureCode.protocolError,
-            message: 'Custom zikr target must be between 1 and 9999',
+            message: 'Custom zikr requires target 1..9999 and taskId 0..65535',
           ),
         ),
       );
@@ -249,7 +252,13 @@ class RingBleSession implements BleSession {
     return _serializeCustomZikr(() async {
       final result = await _sendAndWait(
         RingCommand.customZikrMode,
-        payload: Uint8List.fromList([1, target & 0xFF, target >> 8]),
+        payload: Uint8List.fromList([
+          1,
+          target & 0xFF,
+          target >> 8,
+          taskId & 0xFF,
+          taskId >> 8,
+        ]),
         predicate: _payloadIs(1),
       );
       return _expectExactStatus(result, 1);
@@ -270,13 +279,14 @@ class RingBleSession implements BleSession {
 
   /// 查询戒指当前自定义赞念模式状态。
   ///
-  /// 查询响应必须精确为 `[active, count u16 LE, target u16 LE]` 五字节。
+  /// 查询响应必须精确为固件 0.15 的 15 字节状态。
   Future<Result<RingCustomZikrState, BleFailure>> queryCustomZikr() {
     return _serializeCustomZikr(() async {
       final result = await _sendAndWait(
         RingCommand.customZikrMode,
         payload: Uint8List.fromList([2]),
-        predicate: (frame) => frame.payload.length == 5,
+        // 排除迟到的单字节 ACK，其余载荷交给解析器明确报告格式错误。
+        predicate: (frame) => frame.payload.length != 1,
       );
       return _mapPayload(result, RingCustomZikrState.fromPayload);
     });
@@ -652,7 +662,7 @@ class RingBleSession implements BleSession {
   /// 串行化共用 `0x0111` 命令字的操作，避免并发请求发生应答错配。
   ///
   /// 协议没有 transaction id；超时后的迟到单字节 ACK 不能用于推断后续
-  /// 操作结果，调用方应先通过精确五字节查询对账。
+  /// 操作结果，调用方应先通过精确十五字节查询对账。
   Future<Result<T, BleFailure>> _serializeCustomZikr<T>(
     Future<Result<T, BleFailure>> Function() operation,
   ) {
@@ -837,7 +847,7 @@ class RingBleSession implements BleSession {
             );
           }
         case RingCommand.customZikrMode:
-          if (frame.payload.length == 5) {
+          if (frame.payload.length != 1) {
             _customZikrState.add(
               RingCustomZikrState.fromPayload(frame.payload),
             );

@@ -31,11 +31,14 @@ Sublinur 的 BLE 协议包。包内负责扫描、连接、GATT 传输、协议�
 - iOS 的平台设备标识不能代替戒指 Manufacturer Data 身份。
 - 真实固件、产线密钥、AES IV 和服务端私钥不得提交到本包。
 
-自定义赞念（协议 v1.1.7）由 `RingBleSession` 提供严格校验的
-`enterCustomZikr`、`exitCustomZikr`、`queryCustomZikr` 以及状态/事件流；
+自定义赞念（专用协议 v1.2，固件 0.15）由 `RingBleSession` 提供严格校验的
+`enterCustomZikr(target, taskId: taskId)`、`exitCustomZikr`、`queryCustomZikr` 以及状态/事件流；
 主 App 的 `BlueToothServer` 负责连接生命周期、重连对账、显式结束、忙状态和
 本地任务元数据。页面返回、后台或进程终止不发送退出命令；没有可验证的本地任务
-元数据时只显示通用“自定义赞念”。
+元数据时只显示通用“自定义赞念”。进入载荷固定 5 B，查询/上报固定 15 B，
+状态和事件均包含任务序号、首按/完成 UTC 秒；时间 0 表示未知。
+进入前须确认时间同步成功，完成结果保存后才能退出，退出后查询必须全部清零。
+不支持 5 B 状态响应。真实固件升级和硬件验收未由协议单元测试证明。
 
 ## 验证
 

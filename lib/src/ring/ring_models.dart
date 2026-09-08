@@ -695,143 +695,159 @@ class RingButtonCount {
   }
 }
 
-/// 自定义赞念模式状态。
-///
-/// 协议只保存活动标记、当前计数和目标次数，不包含 App 任务 ID 或名称。
+/// 固件 0.15 自定义赞念状态；时间字段保留 UTC Unix 秒，0 表示未知。
 class RingCustomZikrState {
-  /// 创建自定义赞念状态。
   const RingCustomZikrState({
     required this.active,
     required this.count,
     required this.target,
+    required this.taskId,
+    required this.firstPressUnix,
+    required this.doneUnix,
   });
 
-  /// 是否仍在自定义赞念模式中。
   final bool active;
-
-  /// 当前绝对计数。
   final int count;
-
-  /// 目标次数。
   final int target;
 
-  /// 是否为自动达标后保留的完成状态。
-  bool get isCompleted => !active && target > 0 && count == target;
+  /// App 传入的 16 位任务序号。
+  final int taskId;
 
-  /// 从 `0x0111 op=2` 的 5 字节响应解析状态。
+  /// 第一次按键的 UTC Unix 秒；未按键或未同步时间为 0。
+  final int firstPressUnix;
+
+  /// 达标的 UTC Unix 秒；未完成或时间未知为 0。
+  final int doneUnix;
+
+  static const cleared = RingCustomZikrState(
+    active: false,
+    count: 0,
+    target: 0,
+    taskId: 0,
+    firstPressUnix: 0,
+    doneUnix: 0,
+  );
+
+  bool get isCompleted => !active && target > 0 && count == target;
+  bool get isCleared =>
+      !active &&
+      count == 0 &&
+      target == 0 &&
+      taskId == 0 &&
+      firstPressUnix == 0 &&
+      doneUnix == 0;
+
+  /// 比较设备载荷中的任务结果，不以任务序号单独推断执行轮次。
+  bool sameTaskResult(RingCustomZikrState other) =>
+      active == other.active &&
+      count == other.count &&
+      target == other.target &&
+      taskId == other.taskId &&
+      firstPressUnix == other.firstPressUnix &&
+      doneUnix == other.doneUnix;
+
   factory RingCustomZikrState.fromPayload(Uint8List payload) {
-    if (payload.length != 5) {
+    if (payload.length != 15) {
       throw FormatException(
-        'Custom zikr state payload must be exactly 5 bytes, got ${payload.length}',
+        'Custom zikr state requires 15 bytes (firmware 0.15), got ${payload.length}',
       );
     }
-    final activeValue = payload[0];
-    final count = ringReadUint16(payload, 1);
-    final target = ringReadUint16(payload, 3);
-    if (activeValue > 1) {
-      throw FormatException('Custom zikr active must be 0 or 1: $activeValue');
+    if (payload[0] > 1) {
+      throw const FormatException('Invalid custom zikr active');
     }
-    if (count > 9999 || target > 9999) {
-      throw const FormatException(
-        'Custom zikr count and target must be <= 9999',
-      );
-    }
-    if (activeValue == 1 && (target == 0 || count >= target)) {
-      throw const FormatException(
-        'Active custom zikr state must remain below target',
-      );
-    }
-    final isCleared = activeValue == 0 && count == 0 && target == 0;
-    final isCompleted = activeValue == 0 && target > 0 && count == target;
-    if (activeValue == 0 && !isCleared && !isCompleted) {
-      throw const FormatException('Inactive custom zikr state is invalid');
-    }
-    return RingCustomZikrState(
-      active: activeValue == 1,
-      count: count,
-      target: target,
+    final state = RingCustomZikrState(
+      active: payload[0] == 1,
+      count: ringReadUint16(payload, 1),
+      target: ringReadUint16(payload, 3),
+      taskId: ringReadUint16(payload, 5),
+      firstPressUnix: ringReadUint32(payload, 7),
+      doneUnix: ringReadUint32(payload, 11),
     );
+    if (state.count > 9999 ||
+        state.target > 9999 ||
+        (state.active &&
+            (state.target == 0 ||
+                state.count >= state.target ||
+                state.doneUnix != 0)) ||
+        (!state.active && !state.isCleared && !state.isCompleted)) {
+      throw const FormatException('Invalid custom zikr state');
+    }
+    return state;
   }
 
-  /// 编码为 `0x0111 op=2` 的状态 payload。
-  Uint8List toPayload() => Uint8List.fromList([
-    active ? 1 : 0,
-    count & 0xFF,
-    (count >> 8) & 0xFF,
-    target & 0xFF,
-    (target >> 8) & 0xFF,
-  ]);
+  Uint8List toPayload() {
+    final bytes = ByteData(15)
+      ..setUint8(0, active ? 1 : 0)
+      ..setUint16(1, count, Endian.little)
+      ..setUint16(3, target, Endian.little)
+      ..setUint16(5, taskId, Endian.little)
+      ..setUint32(7, firstPressUnix, Endian.little)
+      ..setUint32(11, doneUnix, Endian.little);
+    return bytes.buffer.asUint8List();
+  }
 
   Map<String, dynamic> toJson() => {
     'active': active,
     'count': count,
     'target': target,
+    'taskId': taskId,
+    'firstPressUnix': firstPressUnix,
+    'doneUnix': doneUnix,
     'completed': isCompleted,
   };
 }
 
-/// 自定义赞念设备主动事件。
+/// 固件 0.15 自定义赞念主动事件。
 class RingCustomZikrEvent {
-  /// 创建自定义赞念事件。
   const RingCustomZikrEvent({
     required this.event,
     required this.count,
     required this.target,
+    required this.taskId,
+    required this.firstPressUnix,
+    required this.doneUnix,
   });
 
-  /// `0x01` 为进度，`0x02` 为达标。
   final int event;
-
-  /// 当前绝对计数。
   final int count;
-
-  /// 目标次数。
   final int target;
+  final int taskId;
+  final int firstPressUnix;
+  final int doneUnix;
+  bool get isProgress => event == 1;
+  bool get isCompleted => event == 2;
 
-  /// 是否为每次按键后的进度事件。
-  bool get isProgress => event == 0x01;
+  /// 查询与通知共享同一状态校验及字段转换。
+  RingCustomZikrState toState() => RingCustomZikrState(
+    active: isProgress,
+    count: count,
+    target: target,
+    taskId: taskId,
+    firstPressUnix: firstPressUnix,
+    doneUnix: doneUnix,
+  );
 
-  /// 是否为达标事件。
-  bool get isCompleted => event == 0x02;
-
-  /// 从 `0x0307` 的精确 5 字节 payload 解析事件。
   factory RingCustomZikrEvent.fromPayload(Uint8List payload) {
-    if (payload.length != 5) {
-      throw FormatException(
-        'Custom zikr event payload must be exactly 5 bytes, got ${payload.length}',
-      );
-    }
-    final event = payload[0];
-    final count = ringReadUint16(payload, 1);
-    final target = ringReadUint16(payload, 3);
-    if (event != 0x01 && event != 0x02) {
-      throw FormatException(
-        'Unknown custom zikr event: 0x${event.toRadixString(16)}',
-      );
-    }
-    if (target == 0 || target > 9999 || count > 9999 || count > target) {
+    if (payload.length != 15 || (payload[0] != 1 && payload[0] != 2)) {
       throw const FormatException(
-        'Custom zikr event count or target is invalid',
+        'Custom zikr event requires 15 bytes and event 1/2',
       );
     }
-    if (event == 0x01 && count >= target) {
-      throw const FormatException(
-        'Custom zikr progress event cannot be complete',
-      );
-    }
-    if (event == 0x02 && count != target) {
-      throw const FormatException(
-        'Custom zikr completion event must reach target',
-      );
-    }
-    return RingCustomZikrEvent(event: event, count: count, target: target);
+    final stateBytes = Uint8List.fromList(payload)
+      ..[0] = payload[0] == 1 ? 1 : 0;
+    final state = RingCustomZikrState.fromPayload(stateBytes);
+    if (state.isCleared) throw const FormatException('Empty custom zikr event');
+    return RingCustomZikrEvent(
+      event: payload[0],
+      count: state.count,
+      target: state.target,
+      taskId: state.taskId,
+      firstPressUnix: state.firstPressUnix,
+      doneUnix: state.doneUnix,
+    );
   }
 
-  Map<String, dynamic> toJson() => {
-    'event': event,
-    'count': count,
-    'target': target,
-  };
+  Map<String, dynamic> toJson() => {...toState().toJson(), 'event': event};
 }
 
 /// 诵经提醒配置项。

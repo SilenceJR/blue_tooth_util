@@ -373,13 +373,13 @@ void main() {
   group('Custom zikr and daily report models', () {
     test('accepts active, cleared and completed custom zikr states', () {
       final active = RingCustomZikrState.fromPayload(
-        Uint8List.fromList([1, 5, 0, 33, 0]),
+        Uint8List.fromList([1, 5, 0, 33, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
       );
       final cleared = RingCustomZikrState.fromPayload(
-        Uint8List.fromList([0, 0, 0, 0, 0]),
+        Uint8List.fromList([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
       );
       final completed = RingCustomZikrState.fromPayload(
-        Uint8List.fromList([0, 33, 0, 33, 0]),
+        Uint8List.fromList([0, 33, 0, 33, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
       );
 
       expect(active.active, isTrue);
@@ -388,7 +388,23 @@ void main() {
       expect(active.isCompleted, isFalse);
       expect(cleared.isCompleted, isFalse);
       expect(completed.isCompleted, isTrue);
-      expect(active.toPayload(), [1, 5, 0, 33, 0]);
+      expect(active.toPayload(), [
+        1,
+        5,
+        0,
+        33,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+      ]);
     });
 
     test('rejects malformed custom state and event payloads', () {
@@ -398,36 +414,36 @@ void main() {
       );
       expect(
         () => RingCustomZikrState.fromPayload(
-          Uint8List.fromList([0, 5, 0, 33, 0]),
+          Uint8List.fromList([0, 5, 0, 33, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
         ),
         throwsFormatException,
       );
       expect(
         () => RingCustomZikrState.fromPayload(
-          Uint8List.fromList([1, 33, 0, 33, 0]),
+          Uint8List.fromList([1, 33, 0, 33, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
         ),
         throwsFormatException,
       );
       expect(
         () => RingCustomZikrEvent.fromPayload(
-          Uint8List.fromList([0, 1, 0, 33, 0]),
+          Uint8List.fromList([0, 1, 0, 33, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
         ),
         throwsFormatException,
       );
       expect(
         () => RingCustomZikrEvent.fromPayload(
-          Uint8List.fromList([1, 33, 0, 33, 0]),
+          Uint8List.fromList([1, 33, 0, 33, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
         ),
         throwsFormatException,
       );
     });
 
-    test('parses progress and completion events with exact five bytes', () {
+    test('parses progress and completion events with exact fifteen bytes', () {
       final progress = RingCustomZikrEvent.fromPayload(
-        Uint8List.fromList([1, 5, 0, 33, 0]),
+        Uint8List.fromList([1, 5, 0, 33, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
       );
       final completion = RingCustomZikrEvent.fromPayload(
-        Uint8List.fromList([2, 33, 0, 33, 0]),
+        Uint8List.fromList([2, 33, 0, 33, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
       );
 
       expect(progress.isProgress, isTrue);
@@ -777,14 +793,17 @@ void main() {
         final session = RingBleSession(device: _device(), transport: transport);
         await session.initialize();
 
-        final enter = session.enterCustomZikr(33);
+        final enter = session.enterCustomZikr(33, taskId: 5);
         final query = session.queryCustomZikr();
         await Future<void>.delayed(Duration.zero);
         expect(transport.writes, hasLength(1));
-        expect(transport.writes.single, contains('11 01'));
+        expect(
+          transport.writes.single,
+          '89 56 11 01 01 00 01 00 05 00 01 21 00 05 00 AA F9 B5 3A',
+        );
 
         // A late one-byte ACK from the previous operation cannot complete the
-        // five-byte query; the first operation is still the only pending one.
+        // fifteen-byte query; the first operation is still the only pending one.
         transport.emit(RingCommand.customZikrMode, const [1]);
         expect((await enter).isOk, isTrue);
         await Future<void>.delayed(Duration.zero);
@@ -796,7 +815,23 @@ void main() {
         await Future<void>.delayed(Duration.zero);
         expect(queryCompleted, isFalse);
 
-        transport.emit(RingCommand.customZikrMode, const [1, 5, 0, 33, 0]);
+        transport.emit(RingCommand.customZikrMode, const [
+          1,
+          5,
+          0,
+          33,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+        ]);
         final state = await query;
         expect(state.valueOrNull?.active, isTrue);
         expect(state.valueOrNull?.count, 5);
@@ -812,14 +847,28 @@ void main() {
         await session.initialize();
 
         expect(
-          (await session.enterCustomZikr(0)).failureOrNull?.code,
+          (await session.enterCustomZikr(0, taskId: 5)).failureOrNull?.code,
           BleFailureCode.protocolError,
         );
         expect(
-          (await session.enterCustomZikr(10000)).failureOrNull?.code,
+          (await session.enterCustomZikr(10000, taskId: 5)).failureOrNull?.code,
           BleFailureCode.protocolError,
         );
+        for (final id in [-1, 65536]) {
+          expect(
+            (await session.enterCustomZikr(33, taskId: id)).failureOrNull?.code,
+            BleFailureCode.protocolError,
+          );
+        }
         expect(transport.writes, isEmpty);
+
+        final oldQuery = session.queryCustomZikr();
+        await Future<void>.delayed(Duration.zero);
+        transport.emit(RingCommand.customZikrMode, const [1, 5, 0, 33, 0]);
+        expect(
+          (await oldQuery).failureOrNull?.code,
+          BleFailureCode.protocolError,
+        );
 
         final query = session.queryCustomZikr();
         await Future<void>.delayed(Duration.zero);
@@ -827,6 +876,34 @@ void main() {
         final result = await query;
         expect(result.failureOrNull?.code, BleFailureCode.deviceError);
         expect(result.failureOrNull?.cause, RingDeviceError.unknownCommand);
+      },
+    );
+
+    test(
+      'accepts both task ID and target boundaries without truncation',
+      () async {
+        final transport = FakeBleTransport();
+        final session = RingBleSession(device: _device(), transport: transport);
+        await session.initialize();
+        for (final (target, taskId) in [(1, 0), (9999, 65535)]) {
+          final operation = session.enterCustomZikr(target, taskId: taskId);
+          await Future<void>.delayed(Duration.zero);
+          expect(
+            transport.writes.last,
+            bytesToHex(
+              const RingFrameCodec().encode(RingCommand.customZikrMode, [
+                1,
+                target & 255,
+                target >> 8,
+                taskId & 255,
+                taskId >> 8,
+              ]),
+            ),
+          );
+          transport.emit(RingCommand.customZikrMode, const [1]);
+          expect((await operation).isOk, isTrue);
+        }
+        await session.dispose();
       },
     );
 
@@ -841,7 +918,23 @@ void main() {
       );
       final batchSubscription = session.zikrBatchEndStream.listen(batches.add);
 
-      transport.emit(RingCommand.customZikrReport, const [1, 5, 0, 33, 0]);
+      transport.emit(RingCommand.customZikrReport, const [
+        1,
+        5,
+        0,
+        33,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+      ]);
       transport.emit(RingCommand.zikrHourlyReport, const [
         2,
         0,
