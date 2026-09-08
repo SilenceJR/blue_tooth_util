@@ -142,6 +142,235 @@ class RingFrameLog {
   }
 }
 
+/// OTA 信息响应。
+///
+/// 数据来自应用模式命令 `0x0402` 的精确 16 字节 payload。
+class RingOtaInfo {
+  RingOtaInfo._({
+    required this.firmwareVersion,
+    required Uint8List productBytes,
+    required this.product,
+    required this.bootFlags,
+    required Uint8List bootVersionBytes,
+  }) : _productBytes = Uint8List.fromList(productBytes),
+       _bootVersionBytes = Uint8List.fromList(bootVersionBytes);
+
+  /// 应用固件版本，来自 4 字节小端无符号整数。
+  final int firmwareVersion;
+
+  final Uint8List _productBytes;
+
+  /// 产品标识的展示文本，仅移除末尾补零，不做大小写或空白归一化。
+  final String product;
+
+  /// OTA 能力位原值；高 4 位保留位在解析阶段必须为零。
+  final int bootFlags;
+
+  final Uint8List _bootVersionBytes;
+
+  /// 固定 8 字节产品标识副本，供 `.rota` 做包含补零的精确匹配。
+  Uint8List get productBytes => Uint8List.fromList(_productBytes);
+
+  /// OTA Bootloader 三段版本号原始字节副本。
+  Uint8List get bootVersionBytes => Uint8List.fromList(_bootVersionBytes);
+
+  /// OTA Bootloader 版本展示文本，不参与能力推断。
+  String get bootVersion => _bootVersionBytes.join('.');
+
+  /// OTA Bootloader 是否在位。
+  bool get bootloaderPresent => bootFlags & 0x01 != 0;
+
+  /// OTA 传输是否要求加密。
+  bool get requiresEncryption => bootFlags & 0x02 != 0;
+
+  /// Bootloader 是否校验升级包产品标识。
+  bool get validatesProduct => bootFlags & 0x04 != 0;
+
+  /// Bootloader 是否执行最低版本限制。
+  bool get enforcesMinimumVersion => bootFlags & 0x08 != 0;
+
+  /// 编码为 `0x0402` 使用的精确 16 字节 payload。
+  ///
+  /// 返回防御性副本；修改返回值不会影响该对象。
+  Uint8List toPayload() {
+    final payload = Uint8List(16);
+    payload[0] = firmwareVersion & 0xFF;
+    payload[1] = (firmwareVersion >> 8) & 0xFF;
+    payload[2] = (firmwareVersion >> 16) & 0xFF;
+    payload[3] = (firmwareVersion >> 24) & 0xFF;
+    payload.setRange(4, 12, _productBytes);
+    payload[12] = bootFlags;
+    payload.setRange(13, 16, _bootVersionBytes);
+    return payload;
+  }
+
+  /// 解析 `0x0402` 响应。
+  factory RingOtaInfo.fromPayload(Uint8List payload) {
+    if (payload.length != 16) {
+      throw FormatException(
+        'OTA info payload must be exactly 16 bytes, got ${payload.length}',
+      );
+    }
+    final productBytes = Uint8List.fromList(payload.sublist(4, 12));
+    final firstPadding = productBytes.indexOf(0);
+    final textLength = firstPadding < 0 ? productBytes.length : firstPadding;
+    if (firstPadding >= 0 &&
+        productBytes.skip(firstPadding).any((value) => value != 0)) {
+      throw const FormatException('OTA product contains data after padding');
+    }
+    if (productBytes
+        .take(textLength)
+        .any((value) => value < 0x20 || value > 0x7E)) {
+      throw const FormatException('OTA product must contain printable ASCII');
+    }
+    final bootFlags = payload[12];
+    if (bootFlags & 0xF0 != 0) {
+      throw FormatException(
+        'OTA info contains reserved boot flags: 0x${bootFlags.toRadixString(16)}',
+      );
+    }
+    return RingOtaInfo._(
+      firmwareVersion: ringReadUint32(payload, 0),
+      productBytes: productBytes,
+      product: String.fromCharCodes(productBytes.take(textLength)),
+      bootFlags: bootFlags,
+      bootVersionBytes: Uint8List.fromList(payload.sublist(13, 16)),
+    );
+  }
+}
+
+/// MAC 输入字节序。
+enum RingMacByteOrder {
+  /// 广播、`0x0101` 和常规文本使用的高位字节在前顺序。
+  msbFirst,
+
+  /// PhyPlus 备用 INFO 响应使用的低位字节在前顺序。
+  lsbFirst,
+}
+
+/// 业务模式戒指与其 OTA 模式设备之间的稳定身份关系。
+class RingDeviceIdentity {
+  RingDeviceIdentity._(Uint8List applicationMac)
+    : _applicationMac = Uint8List.fromList(applicationMac),
+      _otaMac = Uint8List.fromList([
+        ...applicationMac.take(5),
+        (applicationMac[5] + 1) & 0xFF,
+      ]);
+
+  final Uint8List _applicationMac;
+  final Uint8List _otaMac;
+
+  /// 从规范 MAC 文本创建身份。
+  ///
+  /// 接受 12 位紧凑十六进制，或统一使用 `:`、`-` 分隔的 6 组两位十六进制。
+  factory RingDeviceIdentity.fromMac(String mac) {
+    final compact = RegExp(r'^[0-9A-Fa-f]{12}$');
+    final separated = RegExp(
+      r'^([0-9A-Fa-f]{2})([:\-])([0-9A-Fa-f]{2})(\2[0-9A-Fa-f]{2}){4}$',
+    );
+    if (!compact.hasMatch(mac) && !separated.hasMatch(mac)) {
+      throw FormatException('Invalid ring MAC address: $mac');
+    }
+    final clean = mac.replaceAll(RegExp('[:-]'), '');
+    return RingDeviceIdentity._(
+      Uint8List.fromList([
+        for (var index = 0; index < 12; index += 2)
+          int.parse(clean.substring(index, index + 2), radix: 16),
+      ]),
+    );
+  }
+
+  /// 从 6 字节 MAC 创建身份，并显式声明输入字节序。
+  factory RingDeviceIdentity.fromBytes(
+    List<int> mac, {
+    RingMacByteOrder byteOrder = RingMacByteOrder.msbFirst,
+  }) {
+    if (mac.length != 6 || mac.any((value) => value < 0 || value > 0xFF)) {
+      throw const FormatException('Ring MAC must contain exactly 6 bytes');
+    }
+    final normalized = switch (byteOrder) {
+      RingMacByteOrder.msbFirst => mac,
+      RingMacByteOrder.lsbFirst => mac.reversed.toList(),
+    };
+    return RingDeviceIdentity._(Uint8List.fromList(normalized));
+  }
+
+  /// 业务模式 MAC 副本，MSB-first。
+  Uint8List get applicationMac => Uint8List.fromList(_applicationMac);
+
+  /// 派生 OTA MAC 副本，MSB-first。
+  Uint8List get otaMac => Uint8List.fromList(_otaMac);
+
+  /// 业务模式 MAC 的规范大写文本。
+  String get applicationMacText => bytesToHex(_applicationMac, separator: ':');
+
+  /// 派生 OTA MAC 的规范大写文本。
+  String get otaMacText => bytesToHex(_otaMac, separator: ':');
+
+  /// 名称或 OTA Service UUID 是否表明这是一个 OTA 候选设备。
+  ///
+  /// 此结果不能单独用于确认目标身份。
+  bool isOtaCandidate(BleScanDevice device) {
+    final hasName =
+        device.name == RingProtocol.otaDeviceName ||
+        device.rawName == RingProtocol.otaDeviceName;
+    final otaService = _normalizeUuid(RingProtocol.otaServiceUuid);
+    final hasService = device.services.any(
+      (service) => _normalizeUuid(service) == otaService,
+    );
+    return hasName || hasService;
+  }
+
+  /// Manufacturer Data 是否携带本身份的派生 OTA MAC。
+  bool matchesOtaManufacturerData(BleManufacturerData data) {
+    if (data.companyId != RingProtocol.otaManufacturerCompanyId ||
+        data.payload.length != 8) {
+      return false;
+    }
+    for (var index = 0; index < _otaMac.length; index++) {
+      if (data.payload[index] != _otaMac[index]) return false;
+    }
+    return true;
+  }
+
+  /// 同时通过候选筛选和 Manufacturer Data 身份确认。
+  bool matchesOtaDevice(BleScanDevice device) {
+    return isOtaCandidate(device) &&
+        device.manufacturerData.any(matchesOtaManufacturerData);
+  }
+
+  /// 名称、业务 Service 或合法戒指广播是否表明这是业务模式候选设备。
+  ///
+  /// 候选条件只用于减少扫描结果；仍须由 [matchesApplicationDevice] 用
+  /// Manufacturer Data 中的 MAC 确认目标身份。
+  bool isApplicationCandidate(BleScanDevice device) {
+    final name = device.name ?? device.rawName ?? '';
+    final service = _normalizeUuid(RingProtocol.serviceUuid);
+    return name.startsWith(RingProtocol.deviceName) ||
+        device.services.any((item) => _normalizeUuid(item) == service);
+  }
+
+  /// 业务模式 Manufacturer Data 是否携带本身份的原始 MAC。
+  bool matchesApplicationManufacturerData(BleManufacturerData data) {
+    final advertisement = RingAdvertisement.fromManufacturerData(data);
+    final mac = advertisement.valueOrNull?.macAddress;
+    if (mac == null || mac.length != _applicationMac.length) return false;
+    for (var index = 0; index < mac.length; index++) {
+      if (mac[index] != _applicationMac[index]) return false;
+    }
+    return true;
+  }
+
+  /// 同时通过业务候选筛选和 Manufacturer Data 身份确认。
+  bool matchesApplicationDevice(BleScanDevice device) {
+    return isApplicationCandidate(device) &&
+        device.manufacturerData.any(matchesApplicationManufacturerData);
+  }
+
+  static String _normalizeUuid(String value) =>
+      value.replaceAll('-', '').toLowerCase();
+}
+
 /// 智能戒指广播厂商数据。
 class RingAdvertisement {
   /// 创建结构化广播厂商数据。
@@ -199,7 +428,9 @@ class RingAdvertisement {
   /// 从扫描结果解析智能戒指厂商数据。
   ///
   /// [device] 为 SDK 扫描结果；若没有符合 `0x4A59` 结构的厂商数据返回失败。
-  static Result<RingAdvertisement, BleFailure> fromScanDevice(BleScanDevice device) {
+  static Result<RingAdvertisement, BleFailure> fromScanDevice(
+    BleScanDevice device,
+  ) {
     for (final data in device.manufacturerData) {
       final result = fromManufacturerData(data);
       if (result case Ok<RingAdvertisement, BleFailure>()) {

@@ -59,6 +59,14 @@ void main() {
           const [1, 1, 8, 30, 0x7F],
           '89 56 0F 01 01 00 01 00 05 00 01 01 08 1E 7F 43 F5 B5 3A',
         ),
+        RingCommand.otaEnter: (
+          const [],
+          '89 56 01 04 01 00 01 00 00 00 C4 2A B5 3A',
+        ),
+        RingCommand.otaInfo: (
+          const [],
+          '89 56 02 04 01 00 01 00 00 00 84 3F B5 3A',
+        ),
       };
 
       for (final entry in cases.entries) {
@@ -189,6 +197,179 @@ void main() {
     });
   });
 
+  group('Ring OTA models and identity', () {
+    test('parses exact OTA info fields and accepts all defined flags', () {
+      final info = RingOtaInfo.fromPayload(_otaInfoPayload());
+
+      expect(info.firmwareVersion, 0x12345678);
+      expect(info.product, 'RING');
+      expect(info.productBytes, [0x52, 0x49, 0x4E, 0x47, 0, 0, 0, 0]);
+      expect(info.bootFlags, 0x0F);
+      expect(info.bootloaderPresent, isTrue);
+      expect(info.requiresEncryption, isTrue);
+      expect(info.validatesProduct, isTrue);
+      expect(info.enforcesMinimumVersion, isTrue);
+      expect(info.bootVersionBytes, [1, 2, 3]);
+      expect(info.bootVersion, '1.2.3');
+    });
+
+    test('round trips the exact OTA info payload with defensive copies', () {
+      final source = _otaInfoPayload();
+      final info = RingOtaInfo.fromPayload(source);
+      final encoded = info.toPayload();
+
+      expect(encoded, source);
+      expect(encoded, hasLength(16));
+      expect(
+        RingOtaInfo.fromPayload(encoded).toPayload(),
+        source,
+        reason: '0x0402 fields must keep their original little-endian bytes',
+      );
+
+      source[0] = 0;
+      encoded[4] = 0;
+      expect(info.firmwareVersion, 0x12345678);
+      expect(info.product, 'RING');
+      expect(info.toPayload(), _otaInfoPayload());
+    });
+
+    test('requires exactly 16 OTA info bytes', () {
+      expect(
+        () => RingOtaInfo.fromPayload(Uint8List(15)),
+        throwsFormatException,
+      );
+      expect(
+        () => RingOtaInfo.fromPayload(Uint8List(17)),
+        throwsFormatException,
+      );
+    });
+
+    test('validates OTA product padding, full text and printable ASCII', () {
+      expect(
+        RingOtaInfo.fromPayload(
+          _otaInfoPayload(product: 'RING2026'.codeUnits),
+        ).product,
+        'RING2026',
+      );
+      expect(
+        () => RingOtaInfo.fromPayload(
+          _otaInfoPayload(product: [0x52, 0, 0x49, 0, 0, 0, 0, 0]),
+        ),
+        throwsFormatException,
+      );
+      expect(
+        () => RingOtaInfo.fromPayload(
+          _otaInfoPayload(product: [0x1F, 0, 0, 0, 0, 0, 0, 0]),
+        ),
+        throwsFormatException,
+      );
+    });
+
+    test('rejects OTA info reserved boot flags', () {
+      expect(
+        () => RingOtaInfo.fromPayload(_otaInfoPayload(bootFlags: 0x10)),
+        throwsFormatException,
+      );
+    });
+
+    test('normalizes strict MAC input, byte order and OTA wraparound', () {
+      final textIdentity = RingDeviceIdentity.fromMac('AA:BB:CC:DD:EE:FF');
+      final lsbIdentity = RingDeviceIdentity.fromBytes([
+        6,
+        5,
+        4,
+        3,
+        2,
+        1,
+      ], byteOrder: RingMacByteOrder.lsbFirst);
+
+      expect(textIdentity.applicationMacText, 'AA:BB:CC:DD:EE:FF');
+      expect(textIdentity.otaMacText, 'AA:BB:CC:DD:EE:00');
+      expect(lsbIdentity.applicationMacText, '01:02:03:04:05:06');
+      expect(lsbIdentity.otaMacText, '01:02:03:04:05:07');
+      expect(
+        RingDeviceIdentity.fromMac('aabbccddeeff').applicationMacText,
+        'AA:BB:CC:DD:EE:FF',
+      );
+      expect(
+        () => RingDeviceIdentity.fromMac('AA:BB-CC:DD:EE:FF'),
+        throwsFormatException,
+      );
+      expect(
+        () => RingDeviceIdentity.fromBytes([1, 2, 3, 4, 5]),
+        throwsFormatException,
+      );
+    });
+
+    test(
+      'confirms OTA candidates only with exact 0x0504 manufacturer data',
+      () {
+        final identity = RingDeviceIdentity.fromMac('01:02:03:04:05:06');
+        final matchingData = BleManufacturerData(
+          companyId: RingProtocol.otaManufacturerCompanyId,
+          payload: Uint8List.fromList([1, 2, 3, 4, 5, 7, 0xAA, 0xBB]),
+        );
+        final nameOnly = BleScanDevice(
+          deviceId: 'name-only',
+          name: RingProtocol.otaDeviceName,
+        );
+        final serviceOnly = BleScanDevice(
+          deviceId: 'service-only',
+          services: const [RingProtocol.otaServiceUuid],
+        );
+        final wrongCompany = BleManufacturerData(
+          companyId: 0x0503,
+          payload: matchingData.payload,
+        );
+        final wrongLength = BleManufacturerData(
+          companyId: RingProtocol.otaManufacturerCompanyId,
+          payload: Uint8List.fromList([1, 2, 3, 4, 5, 7, 0xAA]),
+        );
+        final wrongMac = BleManufacturerData(
+          companyId: RingProtocol.otaManufacturerCompanyId,
+          payload: Uint8List.fromList([1, 2, 3, 4, 5, 8, 0xAA, 0xBB]),
+        );
+        final candidates = [
+          BleScanDevice(
+            deviceId: 'wrong-company',
+            name: RingProtocol.otaDeviceName,
+            manufacturerData: [wrongCompany],
+          ),
+          BleScanDevice(
+            deviceId: 'wrong-length',
+            services: const [RingProtocol.otaServiceUuid],
+            manufacturerData: [wrongLength],
+          ),
+          BleScanDevice(
+            deviceId: 'wrong-mac',
+            name: RingProtocol.otaDeviceName,
+            manufacturerData: [wrongMac],
+          ),
+          BleScanDevice(
+            deviceId: 'target',
+            services: const [RingProtocol.otaServiceUuid],
+            manufacturerData: [matchingData],
+          ),
+        ];
+
+        expect(identity.isOtaCandidate(nameOnly), isTrue);
+        expect(identity.isOtaCandidate(serviceOnly), isTrue);
+        expect(identity.matchesOtaDevice(nameOnly), isFalse);
+        expect(identity.matchesOtaDevice(serviceOnly), isFalse);
+        expect(identity.matchesOtaManufacturerData(matchingData), isTrue);
+        expect(identity.matchesOtaManufacturerData(wrongCompany), isFalse);
+        expect(identity.matchesOtaManufacturerData(wrongLength), isFalse);
+        expect(identity.matchesOtaManufacturerData(wrongMac), isFalse);
+        expect(
+          candidates
+              .where(identity.matchesOtaDevice)
+              .map((item) => item.deviceId),
+          ['target'],
+        );
+      },
+    );
+  });
+
   group('RingBleSession', () {
     test(
       'connect initialization follows mtu discover subscribe order',
@@ -218,6 +399,135 @@ void main() {
       expect(session.advertisement?.macAddressText, 'AA:BB:CC:DD:EE:FF');
       expect(session.advertisement?.firmwareVersion, 1);
       expect(session.advertisement?.isBound, true);
+    });
+
+    test('queries OTA info and maps the 0x0402 payload', () async {
+      final transport = FakeBleTransport();
+      final session = RingBleSession(device: _device(), transport: transport);
+      await session.initialize();
+
+      final future = session.queryOtaInfo();
+      await Future<void>.delayed(Duration.zero);
+      transport.emit(RingCommand.otaInfo, _otaInfoPayload());
+
+      final result = await future;
+      expect(result.valueOrNull?.firmwareVersion, 0x12345678);
+      expect(result.valueOrNull?.product, 'RING');
+      expect(result.valueOrNull?.bootVersion, '1.2.3');
+    });
+
+    test(
+      'does not confuse OTA firmware low byte FF with device error',
+      () async {
+        final transport = FakeBleTransport();
+        final session = RingBleSession(device: _device(), transport: transport);
+        await session.initialize();
+
+        final future = session.queryOtaInfo();
+        await Future<void>.delayed(Duration.zero);
+        final payload = _otaInfoPayload()..[0] = 0xFF;
+        transport.emit(RingCommand.otaInfo, payload);
+
+        final result = await future;
+        expect(result.isOk, isTrue);
+        expect(result.valueOrNull?.firmwareVersion, 0x123456FF);
+      },
+    );
+
+    test('maps malformed OTA info response to protocol error', () async {
+      final transport = FakeBleTransport();
+      final session = RingBleSession(device: _device(), transport: transport);
+      await session.initialize();
+
+      final future = session.queryOtaInfo();
+      await Future<void>.delayed(Duration.zero);
+      transport.emit(RingCommand.otaInfo, List<int>.filled(15, 0));
+
+      expect((await future).failureOrNull?.code, BleFailureCode.protocolError);
+    });
+
+    test(
+      'returns OTA device errors without waiting for command timeout',
+      () async {
+        final transport = FakeBleTransport();
+        final session = RingBleSession(device: _device(), transport: transport);
+        await session.initialize();
+
+        final future = session.queryOtaInfo();
+        await Future<void>.delayed(Duration.zero);
+        transport.emit(RingCommand.otaInfo, const [0xFF, 0x05]);
+
+        final result = await future.timeout(const Duration(seconds: 1));
+        expect(result.failureOrNull?.code, BleFailureCode.deviceError);
+        expect(result.failureOrNull?.cause, RingDeviceError.badState);
+      },
+    );
+
+    test('enters OTA after acknowledgement then device disconnects', () async {
+      final transport = FakeBleTransport();
+      final session = RingBleSession(device: _device(), transport: transport);
+      await session.initialize();
+
+      final future = session.enterOtaMode();
+      await Future<void>.delayed(Duration.zero);
+      expect(transport.writes.last, contains('01 04'));
+      transport.emit(RingCommand.otaEnter, const [1]);
+      await Future<void>.delayed(Duration.zero);
+      transport.emitConnection(false);
+
+      expect((await future).valueOrNull, RingOtaEntryState.deviceDisconnected);
+    });
+
+    test(
+      'accepts an OTA disconnect that arrives before acknowledgement',
+      () async {
+        final transport = FakeBleTransport();
+        final session = RingBleSession(device: _device(), transport: transport);
+        await session.initialize();
+
+        final future = session.enterOtaMode();
+        await Future<void>.delayed(Duration.zero);
+        transport.emitConnection(false);
+        await Future<void>.delayed(Duration.zero);
+        transport.emit(RingCommand.otaEnter, const [1]);
+
+        expect(
+          (await future).valueOrNull,
+          RingOtaEntryState.deviceDisconnected,
+        );
+      },
+    );
+
+    test(
+      'rejects duplicate OTA entry while the first request is pending',
+      () async {
+        final transport = FakeBleTransport();
+        final session = RingBleSession(device: _device(), transport: transport);
+        await session.initialize();
+
+        final first = session.enterOtaMode();
+        await Future<void>.delayed(Duration.zero);
+        final duplicate = await session.enterOtaMode();
+        transport.emit(RingCommand.otaEnter, const [0xFF, 0x05]);
+
+        expect(duplicate.failureOrNull?.code, BleFailureCode.busy);
+        expect((await first).failureOrNull?.code, BleFailureCode.deviceError);
+      },
+    );
+
+    test('disposing after OTA acknowledgement fails without waiting', () async {
+      final transport = FakeBleTransport();
+      final session = RingBleSession(device: _device(), transport: transport);
+      await session.initialize();
+
+      final future = session.enterOtaMode();
+      await Future<void>.delayed(Duration.zero);
+      transport.emit(RingCommand.otaEnter, const [1]);
+      await Future<void>.delayed(Duration.zero);
+      await session.dispose();
+
+      final result = await future.timeout(const Duration(seconds: 1));
+      expect(result.failureOrNull?.code, BleFailureCode.connectionFailed);
     });
 
     test('screen flip waits for DONE before completing', () async {
@@ -369,6 +679,23 @@ BleScanDevice _device() {
   );
 }
 
+Uint8List _otaInfoPayload({
+  List<int> product = const [0x52, 0x49, 0x4E, 0x47, 0, 0, 0, 0],
+  int bootFlags = 0x0F,
+}) {
+  return Uint8List.fromList([
+    0x78,
+    0x56,
+    0x34,
+    0x12,
+    ...product,
+    bootFlags,
+    1,
+    2,
+    3,
+  ]);
+}
+
 class FakeBleTransport implements BleTransport {
   final scanController = StreamController<BleScanDevice>.broadcast();
   final availabilityController = StreamController<BleAvailability>.broadcast();
@@ -437,30 +764,33 @@ class FakeBleTransport implements BleTransport {
   }
 
   @override
-  Future<Result<void,BleFailure>> requestPermissions() async {
+  Future<Result<void, BleFailure>> requestPermissions() async {
     return const Result.ok(null);
   }
 
   @override
-  Future<Result<int, BleFailure>> requestMtu(String deviceId, int expectedMtu) async {
+  Future<Result<int, BleFailure>> requestMtu(
+    String deviceId,
+    int expectedMtu,
+  ) async {
     calls.add('requestMtu:$expectedMtu');
     return Result.ok(expectedMtu);
   }
 
   @override
-  Future<Result<void,BleFailure>> startScan(BleScanOptions options) async {
+  Future<Result<void, BleFailure>> startScan(BleScanOptions options) async {
     calls.add('startScan');
     return const Result.ok(null);
   }
 
   @override
-  Future<Result<void,BleFailure>> stopScan() async {
+  Future<Result<void, BleFailure>> stopScan() async {
     calls.add('stopScan');
     return const Result.ok(null);
   }
 
   @override
-  Future<Result<void,BleFailure>> subscribeNotifications(
+  Future<Result<void, BleFailure>> subscribeNotifications(
     String deviceId,
     String serviceId,
     String characteristicId,
@@ -470,7 +800,7 @@ class FakeBleTransport implements BleTransport {
   }
 
   @override
-  Future<Result<void,BleFailure>> write(
+  Future<Result<void, BleFailure>> write(
     String deviceId,
     String serviceId,
     String characteristicId,
@@ -488,6 +818,10 @@ class FakeBleTransport implements BleTransport {
 
   void emit(RingCommand command, List<int> payload) {
     valueController.add(_codec.encode(command, payload));
+  }
+
+  void emitConnection(bool connected) {
+    connectionController.add(connected);
   }
 
   @override

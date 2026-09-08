@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:common/common.dart';
 
 import '../common/ble_failure.dart';
+import '../common/crc16.dart';
 
 /// 智能戒指协议命令字。
 enum RingCommand {
@@ -59,6 +60,12 @@ enum RingCommand {
 
   /// 设备主动上报赞念小时桶数据。
   zikrHourlyReport(0x0306, '设备主动上报赞念小时桶数据'),
+
+  /// 请求设备进入 OTA 模式。
+  otaEnter(0x0401, '进入 OTA 模式'),
+
+  /// 查询应用固件与 OTA Bootloader 信息。
+  otaInfo(0x0402, '查询 OTA 信息'),
 
   /// 查询设备当前时间。
   queryTime(0x0502, '查询设备当前时间');
@@ -148,6 +155,15 @@ class RingProtocol {
   /// 广播厂商数据中的灰鲨标识，字节为 `59 4A`。
   static const manufacturerIdentifier = 0x4A59;
 
+  /// OTA 模式广播名称，仅用于筛选候选设备。
+  static const otaDeviceName = 'BS Ring OTA';
+
+  /// OTA 模式服务 UUID，仅用于筛选候选设备和服务发现。
+  static const otaServiceUuid = '5833ff01-9b8b-5191-6142-22a4536ef123';
+
+  /// OTA 模式广播 Manufacturer Data 的 Company Identifier。
+  static const otaManufacturerCompanyId = 0x0504;
+
   /// 连接后建议请求的 MTU。
   static const requestedMtu = 247;
 }
@@ -166,8 +182,8 @@ class RingFrame {
   /// 命令枚举；未知命令返回 `null`。
   RingCommand? get command => RingCommand.fromValue(commandValue);
 
-  /// 是否为设备错误帧，错误帧 payload 形如 `FF <错误码>`。
-  bool get isDeviceError => payload.length >= 2 && payload[0] == 0xFF;
+  /// 是否为设备错误帧，错误帧 payload 固定为 `FF <错误码>` 两字节。
+  bool get isDeviceError => payload.length == 2 && payload[0] == 0xFF;
 
   /// 设备错误码枚举；非错误帧返回 `null`。
   RingDeviceError? get deviceError =>
@@ -267,18 +283,7 @@ class RingFrameCodec {
   ///
   /// [bytes] 为参与校验的字节，协议中范围为 CmdType 到 Payload。
   static int crc16Modbus(List<int> bytes) {
-    var crc = 0xFFFF;
-    for (final byte in bytes) {
-      crc ^= byte;
-      for (var bit = 0; bit < 8; bit++) {
-        if ((crc & 0x0001) != 0) {
-          crc = (crc >> 1) ^ 0xA001;
-        } else {
-          crc >>= 1;
-        }
-      }
-    }
-    return crc & 0xFFFF;
+    return bleCrc16Modbus(bytes, seed: 0xFFFF);
   }
 
   static Result<RingFrame, BleFailure> _invalid(String message) {

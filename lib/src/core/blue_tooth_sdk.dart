@@ -5,6 +5,8 @@ import 'package:common/common.dart';
 import '../common/ble_failure.dart';
 import '../ring/ring_protocol.dart';
 import '../ring/ring_protocol_adapter.dart';
+import '../ring/ring_models.dart';
+import '../ring/ring_ota_update_session.dart';
 import 'ble_protocol_adapter.dart';
 import 'ble_scan_device.dart';
 import 'ble_session.dart';
@@ -46,13 +48,23 @@ class BlueToothSdk {
     _adapters.add(adapter);
   }
 
+  /// 创建绑定目标戒指身份的跨连接 OTA 更新会话。
+  ///
+  /// 调用方应先释放现有业务会话；更新会话会自行扫描 OTA/业务模式设备，
+  /// 并始终以 Manufacturer Data 中的 MAC 确认目标。
+  RingOtaUpdateSession createRingOtaUpdateSession({
+    required RingDeviceIdentity identity,
+  }) {
+    return RingOtaUpdateSession(transport: _transport, identity: identity);
+  }
+
   /// 请求蓝牙运行时权限。
-  Future<Result<void,BleFailure>> requestPermissions() {
+  Future<Result<void, BleFailure>> requestPermissions() {
     return _transport.requestPermissions();
   }
 
   /// 获取当前蓝牙可用状态。
-  Future<Result<BleAvailability,BleFailure>> getAvailability() {
+  Future<Result<BleAvailability, BleFailure>> getAvailability() {
     return _transport.getAvailability();
   }
 
@@ -60,7 +72,7 @@ class BlueToothSdk {
   ///
   /// [unfiltered] 为 true 时扫描全部设备；为 false 时默认按智能戒指名称
   /// 和 Service UUID 过滤。[serviceIds] 和 [namePrefixes] 可覆盖默认过滤条件。
-  Future<Result<void,BleFailure>> startScan({
+  Future<Result<void, BleFailure>> startScan({
     bool unfiltered = false,
     List<String> serviceIds = const [RingProtocol.serviceUuid],
     List<String> namePrefixes = const [RingProtocol.deviceName, 'Zikr'],
@@ -75,7 +87,7 @@ class BlueToothSdk {
   }
 
   /// 停止扫描。
-  Future<Result<void,BleFailure>> stopScan() {
+  Future<Result<void, BleFailure>> stopScan() {
     return _transport.stopScan();
   }
 
@@ -83,7 +95,7 @@ class BlueToothSdk {
   ///
   /// [device] 为扫描结果；[timeout] 为连接超时；
   /// [autoConnect] 控制是否启用平台自动重连。
-  Future<Result<BleSession,BleFailure>> connect(
+  Future<Result<BleSession, BleFailure>> connect(
     BleScanDevice device, {
     Duration timeout = const Duration(seconds: 20),
     bool autoConnect = false,
@@ -115,6 +127,17 @@ class BlueToothSdk {
     );
     final initializeResult = await session.initialize();
     if (initializeResult case Err(:final error)) {
+      await session.dispose();
+      final disconnectResult = await _transport.disconnect(device.deviceId);
+      if (disconnectResult case Err(error: final disconnectError)) {
+        return Result.err(
+          BleFailure(
+            code: BleFailureCode.connectionFailed,
+            message: 'Session initialization and disconnect cleanup failed',
+            cause: (initialization: error, disconnect: disconnectError),
+          ),
+        );
+      }
       return Result.err(error);
     }
     return Result.ok(session);
@@ -123,7 +146,7 @@ class BlueToothSdk {
   /// 按设备 ID 断开连接。
   ///
   /// [deviceId] 为平台设备标识。
-  Future<Result<void,BleFailure>> disconnect(String deviceId) {
+  Future<Result<void, BleFailure>> disconnect(String deviceId) {
     return _transport.disconnect(deviceId);
   }
 
