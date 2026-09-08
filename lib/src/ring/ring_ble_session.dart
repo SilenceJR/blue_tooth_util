@@ -52,6 +52,7 @@ class RingBleSession implements BleSession {
   bool _screenFlipBusy = false;
   bool _findRingBusy = false;
   bool _otaEntryBusy = false;
+  Future<void> _customZikrTail = Future<void>.value();
   Completer<Result<RingOtaEntryState, BleFailure>>? _otaEntryOutcome;
   Completer<Result<RingScreenDirection, BleFailure>>? _screenFlipDone;
   Completer<Result<void, BleFailure>>? _findRingDone;
@@ -64,6 +65,9 @@ class RingBleSession implements BleSession {
   final _sport = StreamController<RingRealtimeSport>.broadcast();
   final _buttonCount = StreamController<RingButtonCount>.broadcast();
   final _zikrDay = StreamController<RingZikrDay>.broadcast();
+  final _zikrBatchEnd = StreamController<RingZikrBatchEnd>.broadcast();
+  final _customZikrState = StreamController<RingCustomZikrState>.broadcast();
+  final _customZikrEvent = StreamController<RingCustomZikrEvent>.broadcast();
   final _screenOffTime = StreamController<RingScreenOffTime>.broadcast();
   final _screenDirection = StreamController<RingScreenDirection>.broadcast();
   final _prayerReminders =
@@ -106,6 +110,17 @@ class RingBleSession implements BleSession {
 
   /// 赞念分时段主动上报流。
   Stream<RingZikrDay> get zikrDayStream => _zikrDay.stream;
+
+  /// `0x0306` 批次结束流；不代表 App 已完整收到本批次数据。
+  Stream<RingZikrBatchEnd> get zikrBatchEndStream => _zikrBatchEnd.stream;
+
+  /// `0x0111 op=2` 状态响应流。
+  Stream<RingCustomZikrState> get customZikrStateStream =>
+      _customZikrState.stream;
+
+  /// `0x0307` 自定义赞念主动事件流。
+  Stream<RingCustomZikrEvent> get customZikrEventStream =>
+      _customZikrEvent.stream;
 
   /// 设备主动上报或设置后的息屏时间流。
   Stream<RingScreenOffTime> get screenOffTimeStream => _screenOffTime.stream;
@@ -193,7 +208,10 @@ class RingBleSession implements BleSession {
       RingCommand.ping,
       payload: Uint8List.fromList(payload),
     );
-    return result.match(ok: (value) => Result.ok(value.payload), err: (err) =>Result.err(err));
+    return result.match(
+      ok: (value) => Result.ok(value.payload),
+      err: (err) => Result.err(err),
+    );
   }
 
   /// 查询设备信息。
@@ -212,6 +230,56 @@ class RingBleSession implements BleSession {
   Future<Result<RingButtonCount, BleFailure>> queryButtonCount() async {
     final result = await _sendAndWait(RingCommand.buttonCountQuery);
     return _mapPayload(result, RingButtonCount.fromPayload);
+  }
+
+  /// 进入自定义赞念模式并把计数从 0 开始。
+  ///
+  /// [target] 必须为 1~9999。成功响应必须精确为单字节 `0x01`。
+  Future<Result<void, BleFailure>> enterCustomZikr(int target) {
+    if (target < 1 || target > 9999) {
+      return Future.value(
+        const Result.err(
+          BleFailure(
+            code: BleFailureCode.protocolError,
+            message: 'Custom zikr target must be between 1 and 9999',
+          ),
+        ),
+      );
+    }
+    return _serializeCustomZikr(() async {
+      final result = await _sendAndWait(
+        RingCommand.customZikrMode,
+        payload: Uint8List.fromList([1, target & 0xFF, target >> 8]),
+        predicate: _payloadIs(1),
+      );
+      return _expectExactStatus(result, 1);
+    });
+  }
+
+  /// 显式退出自定义赞念模式并清除设备状态。
+  Future<Result<void, BleFailure>> exitCustomZikr() {
+    return _serializeCustomZikr(() async {
+      final result = await _sendAndWait(
+        RingCommand.customZikrMode,
+        payload: Uint8List.fromList([0]),
+        predicate: _payloadIs(1),
+      );
+      return _expectExactStatus(result, 1);
+    });
+  }
+
+  /// 查询戒指当前自定义赞念模式状态。
+  ///
+  /// 查询响应必须精确为 `[active, count u16 LE, target u16 LE]` 五字节。
+  Future<Result<RingCustomZikrState, BleFailure>> queryCustomZikr() {
+    return _serializeCustomZikr(() async {
+      final result = await _sendAndWait(
+        RingCommand.customZikrMode,
+        payload: Uint8List.fromList([2]),
+        predicate: (frame) => frame.payload.length == 5,
+      );
+      return _mapPayload(result, RingCustomZikrState.fromPayload);
+    });
   }
 
   /// 开关实时运动上报。
@@ -278,7 +346,12 @@ class RingBleSession implements BleSession {
     _otaEntryOutcome = outcome;
     try {
       final result = await _sendAndWait(RingCommand.otaEnter);
-      if (result case Err(:final error)) return Result.err(error);
+      if (result case Err(:final error)) {
+        // 戒指进入 Bootloader 时可能先断开，再使 Android 的 GATT 写回调失败。
+        // 此时断链已由连接流确认，继续由上层扫描 OTA 广播验证目标设备。
+        if (outcome.isCompleted) return await outcome.future;
+        return Result.err(error);
+      }
       final payload = result.valueOrNull!.payload;
       if (payload.length != 1 || payload[0] != 0x01) {
         return const Result.err(
@@ -290,8 +363,7 @@ class RingBleSession implements BleSession {
       }
       return await outcome.future.timeout(
         const Duration(seconds: 5),
-        onTimeout: () =>
-            const Result.ok(RingOtaEntryState.disconnectTimedOut),
+        onTimeout: () => const Result.ok(RingOtaEntryState.disconnectTimedOut),
       );
     } finally {
       _otaEntryBusy = false;
@@ -303,7 +375,9 @@ class RingBleSession implements BleSession {
   ///
   /// [flipped] 为 null 时按固件 toggle 当前方向；true 表示翻转 180°；
   /// false 表示恢复正常方向。该命令会等待设备返回 DONE 后才完成。
-  Future<Result<RingScreenDirection, BleFailure>> flipScreen({bool? flipped}) async {
+  Future<Result<RingScreenDirection, BleFailure>> flipScreen({
+    bool? flipped,
+  }) async {
     if (_screenFlipBusy) {
       final failure = const BleFailure(
         code: BleFailureCode.busy,
@@ -520,6 +594,9 @@ class RingBleSession implements BleSession {
     await _sport.close();
     await _buttonCount.close();
     await _zikrDay.close();
+    await _zikrBatchEnd.close();
+    await _customZikrState.close();
+    await _customZikrEvent.close();
     await _screenOffTime.close();
     await _screenDirection.close();
     await _prayerReminders.close();
@@ -572,6 +649,39 @@ class RingBleSession implements BleSession {
     );
   }
 
+  /// 串行化共用 `0x0111` 命令字的操作，避免并发请求发生应答错配。
+  ///
+  /// 协议没有 transaction id；超时后的迟到单字节 ACK 不能用于推断后续
+  /// 操作结果，调用方应先通过精确五字节查询对账。
+  Future<Result<T, BleFailure>> _serializeCustomZikr<T>(
+    Future<Result<T, BleFailure>> Function() operation,
+  ) {
+    final previous = _customZikrTail;
+    final completer = Completer<Result<T, BleFailure>>();
+    _customZikrTail = () async {
+      await previous;
+      try {
+        completer.complete(await operation());
+      } on Object catch (error) {
+        if (error is BleFailure) {
+          completer.complete(Result.err(error));
+        } else {
+          completer.complete(
+            Result.err(
+              BleFailure(
+                code: BleFailureCode.protocolError,
+                message: 'Custom zikr operation failed',
+                cause: error,
+              ),
+            ),
+          );
+        }
+        // Keep the serialized tail usable after a failed operation.
+      }
+    }();
+    return completer.future;
+  }
+
   Result<T, BleFailure> _mapPayload<T>(
     Result<RingFrame, BleFailure> result,
     T Function(Uint8List payload) mapper,
@@ -614,6 +724,23 @@ class RingBleSession implements BleSession {
           ),
         );
       },
+      err: (err) => Result.err(err),
+    );
+  }
+
+  Result<void, BleFailure> _expectExactStatus(
+    Result<RingFrame, BleFailure> result,
+    int status,
+  ) {
+    return result.match(
+      ok: (value) => value.payload.length == 1 && value.payload[0] == status
+          ? const Result.ok(null)
+          : const Result.err(
+              BleFailure(
+                code: BleFailureCode.protocolError,
+                message: 'Unexpected ring command status',
+              ),
+            ),
       err: (err) => Result.err(err),
     );
   }
@@ -700,7 +827,23 @@ class RingBleSession implements BleSession {
         case RingCommand.buttonCountQuery || RingCommand.buttonCountReport:
           _buttonCount.add(RingButtonCount.fromPayload(frame.payload));
         case RingCommand.zikrHourlyReport:
-          _zikrDay.add(RingZikrDay.fromPayload(frame.payload));
+          if (frame.payload.length == 52) {
+            _zikrDay.add(RingZikrDay.fromPayload(frame.payload));
+          } else if (frame.payload.length == 13) {
+            _zikrBatchEnd.add(RingZikrBatchEnd.fromPayload(frame.payload));
+          } else {
+            throw FormatException(
+              'Zikr 0x0306 payload must be 52 or 13 bytes, got ${frame.payload.length}',
+            );
+          }
+        case RingCommand.customZikrMode:
+          if (frame.payload.length == 5) {
+            _customZikrState.add(
+              RingCustomZikrState.fromPayload(frame.payload),
+            );
+          }
+        case RingCommand.customZikrReport:
+          _customZikrEvent.add(RingCustomZikrEvent.fromPayload(frame.payload));
         case RingCommand.screenOffTime:
           if (frame.payload.length == 1 && frame.payload[0] >= 10) {
             _screenOffTime.add(RingScreenOffTime(frame.payload[0]));
@@ -846,6 +989,25 @@ class RingBleSession implements BleSession {
   }
 
   void _completePending(RingFrame frame, Result<RingFrame, BleFailure> result) {
+    // start 与 stop 共用 0x010B；极早收到 DONE 时，两个 pending 都属于同一
+    // 次停止动作，不能只完成队首 start pending 而让 stop 等到超时。
+    if (frame.command == RingCommand.findRing &&
+        result.isOk &&
+        frame.payload.length == 1 &&
+        frame.payload[0] == 2) {
+      final matches = _pendingFrames
+          .where(
+            (pending) =>
+                pending.commandValue == frame.commandValue &&
+                pending.predicate(frame),
+          )
+          .toList();
+      for (final pending in matches) {
+        _pendingFrames.remove(pending);
+        pending.complete(result);
+      }
+      return;
+    }
     _PendingFrame? match;
     for (final pending in _pendingFrames) {
       if (pending.commandValue == frame.commandValue &&

@@ -17,7 +17,7 @@ class RingProtocolAdapter implements BleProtocolAdapter<RingBleSession> {
 
   @override
   /// 适配器标识，包含当前支持的协议版本。
-  String get id => 'ring-v1.1.5';
+  String get id => 'ring-v1.1.7';
 
   @override
   /// 判断扫描设备是否为智能戒指。
@@ -40,7 +40,9 @@ class RingProtocolAdapter implements BleProtocolAdapter<RingBleSession> {
   ///
   /// [device] 为扫描结果；成功时返回 MAC、固件版本、客户 id、机器 id、
   /// 绑定能力和绑定状态等结构化字段。
-  Result<RingAdvertisement, BleFailure> parseAdvertisement(BleScanDevice device) {
+  Result<RingAdvertisement, BleFailure> parseAdvertisement(
+    BleScanDevice device,
+  ) {
     return RingAdvertisement.fromScanDevice(device);
   }
 

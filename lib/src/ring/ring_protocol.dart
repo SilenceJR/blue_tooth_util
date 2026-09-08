@@ -37,6 +37,9 @@ enum RingCommand {
   /// 查询诵经提醒表。
   prayerReminderQuery(0x0110, '查询诵经提醒表'),
 
+  /// 设置、退出或查询自定义赞念模式。
+  customZikrMode(0x0111, '自定义赞念模式'),
+
   /// 寻找戒指。
   findRing(0x010B, '寻找戒指'),
 
@@ -60,6 +63,9 @@ enum RingCommand {
 
   /// 设备主动上报赞念小时桶数据。
   zikrHourlyReport(0x0306, '设备主动上报赞念小时桶数据'),
+
+  /// 设备主动上报自定义赞念进度或达标事件。
+  customZikrReport(0x0307, '自定义赞念进度上报'),
 
   /// 请求设备进入 OTA 模式。
   otaEnter(0x0401, '进入 OTA 模式'),
@@ -87,10 +93,7 @@ enum RingCommand {
     return null;
   }
 
-  Map<String,dynamic> toJson() => {
-    'value': value,
-    'label': label,
-  };
+  Map<String, dynamic> toJson() => {'value': value, 'label': label};
 }
 
 /// 设备错误帧中的错误码。
@@ -130,10 +133,7 @@ enum RingDeviceError {
     return null;
   }
 
-  Map<String,dynamic> toJson() => {
-    'code': code,
-    'message': message,
-  };
+  Map<String, dynamic> toJson() => {'code': code, 'message': message};
 }
 
 /// 智能戒指 GATT 与连接参数常量。

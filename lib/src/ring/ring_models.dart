@@ -695,6 +695,145 @@ class RingButtonCount {
   }
 }
 
+/// 自定义赞念模式状态。
+///
+/// 协议只保存活动标记、当前计数和目标次数，不包含 App 任务 ID 或名称。
+class RingCustomZikrState {
+  /// 创建自定义赞念状态。
+  const RingCustomZikrState({
+    required this.active,
+    required this.count,
+    required this.target,
+  });
+
+  /// 是否仍在自定义赞念模式中。
+  final bool active;
+
+  /// 当前绝对计数。
+  final int count;
+
+  /// 目标次数。
+  final int target;
+
+  /// 是否为自动达标后保留的完成状态。
+  bool get isCompleted => !active && target > 0 && count == target;
+
+  /// 从 `0x0111 op=2` 的 5 字节响应解析状态。
+  factory RingCustomZikrState.fromPayload(Uint8List payload) {
+    if (payload.length != 5) {
+      throw FormatException(
+        'Custom zikr state payload must be exactly 5 bytes, got ${payload.length}',
+      );
+    }
+    final activeValue = payload[0];
+    final count = ringReadUint16(payload, 1);
+    final target = ringReadUint16(payload, 3);
+    if (activeValue > 1) {
+      throw FormatException('Custom zikr active must be 0 or 1: $activeValue');
+    }
+    if (count > 9999 || target > 9999) {
+      throw const FormatException(
+        'Custom zikr count and target must be <= 9999',
+      );
+    }
+    if (activeValue == 1 && (target == 0 || count >= target)) {
+      throw const FormatException(
+        'Active custom zikr state must remain below target',
+      );
+    }
+    final isCleared = activeValue == 0 && count == 0 && target == 0;
+    final isCompleted = activeValue == 0 && target > 0 && count == target;
+    if (activeValue == 0 && !isCleared && !isCompleted) {
+      throw const FormatException('Inactive custom zikr state is invalid');
+    }
+    return RingCustomZikrState(
+      active: activeValue == 1,
+      count: count,
+      target: target,
+    );
+  }
+
+  /// 编码为 `0x0111 op=2` 的状态 payload。
+  Uint8List toPayload() => Uint8List.fromList([
+    active ? 1 : 0,
+    count & 0xFF,
+    (count >> 8) & 0xFF,
+    target & 0xFF,
+    (target >> 8) & 0xFF,
+  ]);
+
+  Map<String, dynamic> toJson() => {
+    'active': active,
+    'count': count,
+    'target': target,
+    'completed': isCompleted,
+  };
+}
+
+/// 自定义赞念设备主动事件。
+class RingCustomZikrEvent {
+  /// 创建自定义赞念事件。
+  const RingCustomZikrEvent({
+    required this.event,
+    required this.count,
+    required this.target,
+  });
+
+  /// `0x01` 为进度，`0x02` 为达标。
+  final int event;
+
+  /// 当前绝对计数。
+  final int count;
+
+  /// 目标次数。
+  final int target;
+
+  /// 是否为每次按键后的进度事件。
+  bool get isProgress => event == 0x01;
+
+  /// 是否为达标事件。
+  bool get isCompleted => event == 0x02;
+
+  /// 从 `0x0307` 的精确 5 字节 payload 解析事件。
+  factory RingCustomZikrEvent.fromPayload(Uint8List payload) {
+    if (payload.length != 5) {
+      throw FormatException(
+        'Custom zikr event payload must be exactly 5 bytes, got ${payload.length}',
+      );
+    }
+    final event = payload[0];
+    final count = ringReadUint16(payload, 1);
+    final target = ringReadUint16(payload, 3);
+    if (event != 0x01 && event != 0x02) {
+      throw FormatException(
+        'Unknown custom zikr event: 0x${event.toRadixString(16)}',
+      );
+    }
+    if (target == 0 || target > 9999 || count > 9999 || count > target) {
+      throw const FormatException(
+        'Custom zikr event count or target is invalid',
+      );
+    }
+    if (event == 0x01 && count >= target) {
+      throw const FormatException(
+        'Custom zikr progress event cannot be complete',
+      );
+    }
+    if (event == 0x02 && count != target) {
+      throw const FormatException(
+        'Custom zikr completion event must reach target',
+      );
+    }
+    return RingCustomZikrEvent(event: event, count: count, target: target);
+  }
+
+  Map<String, dynamic> toJson() => {
+    'event': event,
+    'count': count,
+    'target': target,
+  };
+}
+
 /// 诵经提醒配置项。
 class RingPrayerReminder {
   /// 创建一条诵经提醒。
@@ -861,12 +1000,21 @@ class RingZikrDay {
 
   /// 从 52 字节赞念日 payload 解析模型。
   factory RingZikrDay.fromPayload(Uint8List payload) {
-    if (payload.length < 52) {
-      throw const FormatException('Zikr day payload must be 52 bytes');
+    if (payload.length != 52) {
+      throw FormatException(
+        'Zikr day payload must be exactly 52 bytes, got ${payload.length}',
+      );
     }
+    if (payload[0] != 0 && payload[0] != 1) {
+      throw FormatException('Zikr day type must be 0 or 1: ${payload[0]}');
+    }
+    final year = 2000 + payload[1];
+    final month = payload[2];
+    final day = payload[3];
+    final date = _strictDate(year, month, day);
     return RingZikrDay(
       isToday: payload[0] == 1,
-      date: DateTime(2000 + payload[1], payload[2], payload[3]),
+      date: date,
       hourlyCounts: List.generate(
         24,
         (index) => ringReadUint16(payload, 4 + index * 2),
@@ -882,6 +1030,55 @@ class RingZikrDay {
       'total': total,
     };
   }
+}
+
+/// `0x0306` 日数据批次结束帧。
+class RingZikrBatchEnd {
+  /// 创建批次结束信息。
+  const RingZikrBatchEnd({
+    required this.sentAt,
+    required this.previousSentAt,
+    required this.dayCount,
+  });
+
+  /// 本轮最后一帧入队时的 Unix 秒。
+  final int sentAt;
+
+  /// 上一轮发送结束时间的 Unix 秒，首次为 0。
+  final int previousSentAt;
+
+  /// 本轮结束帧前发送的日数据帧数。
+  final int dayCount;
+
+  /// 从精确 13 字节的 `0x0306` 结束 payload 解析。
+  factory RingZikrBatchEnd.fromPayload(Uint8List payload) {
+    if (payload.length != 13) {
+      throw FormatException(
+        'Zikr batch end payload must be exactly 13 bytes, got ${payload.length}',
+      );
+    }
+    if (payload[0] != 0x02 ||
+        payload[1] != 0 ||
+        payload[2] != 0 ||
+        payload[3] != 0) {
+      throw const FormatException('Invalid zikr batch end header');
+    }
+    final dayCount = payload[12];
+    if (dayCount > 31) {
+      throw FormatException('Zikr batch day count is out of range: $dayCount');
+    }
+    return RingZikrBatchEnd(
+      sentAt: ringReadUint32(payload, 4),
+      previousSentAt: ringReadUint32(payload, 8),
+      dayCount: dayCount,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'sentAt': sentAt,
+    'previousSentAt': previousSentAt,
+    'dayCount': dayCount,
+  };
 }
 
 /// 设备息屏时间。
@@ -908,4 +1105,15 @@ DateTime _timestamp6(Uint8List payload, int offset) {
     ringReadUint32(payload, offset) * 1000,
     isUtc: true,
   );
+}
+
+DateTime _strictDate(int year, int month, int day) {
+  if (month < 1 || month > 12 || day < 1 || day > 31) {
+    throw const FormatException('Zikr date is out of range');
+  }
+  final date = DateTime.utc(year, month, day);
+  if (date.year != year || date.month != month || date.day != day) {
+    throw const FormatException('Zikr date is invalid');
+  }
+  return date;
 }
