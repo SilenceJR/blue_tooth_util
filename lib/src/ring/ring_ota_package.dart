@@ -24,7 +24,7 @@ enum RingOtaVersionPolicy {
 /// 签名、有效期和授权。
 final class RingOtaRecoveryMetadata {
   /// 持久化 JSON schema 版本。
-  static const int schemaVersion = 1;
+  static const int schemaVersion = 2;
 
   RingOtaRecoveryMetadata._({
     required Uint8List deviceOtaInfoPayload,
@@ -62,7 +62,7 @@ final class RingOtaRecoveryMetadata {
   /// `.rota` 分区数量。
   final int partitionCount;
 
-  /// 编码为稳定的 v1 JSON Map；每次调用返回独立容器。
+  /// 编码为稳定的 v2 JSON Map；每次调用返回独立容器。
   Map<String, Object?> toJson() => {
     'schemaVersion': RingOtaRecoveryMetadata.schemaVersion,
     'deviceOtaInfo': _deviceOtaInfoPayload.toList(),
@@ -138,7 +138,7 @@ final class RingOtaRecoveryMetadata {
             json,
             'firmwareVersion',
             min: 0,
-            max: 0xFFFFFFFF,
+            max: 0xFFFF,
           ),
           productBytes: product,
           totalSize: _readInt(json, 'totalSize', min: 1, max: 0xFFFFFFFF),
@@ -315,21 +315,26 @@ class RingOtaPackageParser {
   static const _maxPartitionSize = 16384;
   static const _sramRunStart = 0x1FFF0000;
   static const _sramRunEnd = 0x1FFFF400;
-  static const _sramFlashSize = 0xF000;
-  static const _sramPhysicalBase = 0x11011000;
+  static const _sramFlashSize = 0xE000;
+  static const _sramPhysicalBase = 0x11012000;
   static const _xipStart = 0x11020000;
   static const _xipEnd = 0x1103D000;
 
-  /// 解析并验证明文 `.rota v1`。
+  /// 解析并验证明文 `.rota v1`，固件版本使用 v1.7 的 ver16。
+  ///
+  /// [forceFirmware] 仅供受控调试的选包检查及逐次授权后的重刷/降级，
+  /// 只跳过版本比较，不跳过产品、能力、CRC、地址或长度校验。
   Result<RingOtaPackage, BleFailure> parse(
     Uint8List bytes, {
     required RingOtaInfo deviceInfo,
     required RingOtaVersionPolicy versionPolicy,
+    bool forceFirmware = false,
   }) {
     return _parseResult(
       bytes,
       deviceInfo: deviceInfo,
       versionPolicy: versionPolicy,
+      forceFirmware: forceFirmware,
     );
   }
 
@@ -416,7 +421,10 @@ class RingOtaPackageParser {
       _reject('ROTA reserved header bytes must be zero');
     }
 
-    final firmwareVersion = ringReadUint32(bytes, 8);
+    if (bytes[10] != 0 || bytes[11] != 0) {
+      _reject('ROTA firmware version reserved bytes must be zero');
+    }
+    final firmwareVersion = ringReadUint16(bytes, 8);
     final totalSize = ringReadUint32(bytes, 12);
     final productBytes = Uint8List.fromList(bytes.sublist(16, 24));
     final tableEnd = _headerSize + partitionCount * _partitionEntrySize;

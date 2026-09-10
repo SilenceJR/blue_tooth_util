@@ -155,7 +155,7 @@ class RingOtaInfo {
   }) : _productBytes = Uint8List.fromList(productBytes),
        _bootVersionBytes = Uint8List.fromList(bootVersionBytes);
 
-  /// 应用固件版本，来自 4 字节小端无符号整数。
+  /// 应用固件版本，16 位 `(major << 8) | minor`；原四字节槽高两字节为零。
   final int firmwareVersion;
 
   final Uint8List _productBytes;
@@ -196,8 +196,6 @@ class RingOtaInfo {
     final payload = Uint8List(16);
     payload[0] = firmwareVersion & 0xFF;
     payload[1] = (firmwareVersion >> 8) & 0xFF;
-    payload[2] = (firmwareVersion >> 16) & 0xFF;
-    payload[3] = (firmwareVersion >> 24) & 0xFF;
     payload.setRange(4, 12, _productBytes);
     payload[12] = bootFlags;
     payload.setRange(13, 16, _bootVersionBytes);
@@ -210,6 +208,9 @@ class RingOtaInfo {
       throw FormatException(
         'OTA info payload must be exactly 16 bytes, got ${payload.length}',
       );
+    }
+    if (payload[2] != 0 || payload[3] != 0) {
+      throw const FormatException('OTA firmware version reserved bytes must be zero');
     }
     final productBytes = Uint8List.fromList(payload.sublist(4, 12));
     final firstPadding = productBytes.indexOf(0);
@@ -230,7 +231,7 @@ class RingOtaInfo {
       );
     }
     return RingOtaInfo._(
-      firmwareVersion: ringReadUint32(payload, 0),
+      firmwareVersion: ringReadUint16(payload, 0),
       productBytes: productBytes,
       product: String.fromCharCodes(productBytes.take(textLength)),
       bootFlags: bootFlags,
