@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-09-10 OTA v1.7
+
+- 统一 ver16、严格拒绝版本槽高字节非零，恢复摘要升级至 schema 2；保留 V0.16 的 0x0112 支持。
+- 调试解析支持逐次授权的同版本重刷/降级，保持产品、CRC、Bootloader、加密与地址门禁。
+- 按 v1.7 应用 bank 物理布局限制 SRAM 分区为 56 KB，补充协议冲突说明及测试。
+
+
 ## Unreleased
 
 - 增加 `0x0112` 每日诵经提醒与 `queryPrayerReminder/setPrayerReminder/disablePrayerReminder`；模型改为明确的起止小时/分钟及分钟间隔，严格校验和串行应答处理，旧固定提醒表不再用于业务。

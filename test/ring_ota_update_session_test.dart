@@ -85,10 +85,7 @@ void main() {
 
         expect(result.isOk, isTrue);
         expect(result.valueOrNull?.roundCount, 1);
-        expect(
-          result.valueOrNull?.confirmedOtaInfo.firmwareVersion,
-          0x00010203,
-        );
+        expect(result.valueOrNull?.confirmedOtaInfo.firmwareVersion, 0x0103);
         expect(transport.connects, [
           'ota-target',
           'app-target',
@@ -183,7 +180,7 @@ void main() {
         _wireOtaTransfer(
           transport,
           onApplicationOtaInfo: () => transport.respondApplicationOtaInfo(
-            _otaInfoPayload(firmwareVersion: 0x00010202),
+            _otaInfoPayload(firmwareVersion: 0x0102),
           ),
         );
         addTearDown(() async {
@@ -416,7 +413,7 @@ BleScanDevice _applicationDevice(
   ],
 );
 
-Uint8List _otaInfoPayload({int firmwareVersion = 0x00010203}) =>
+Uint8List _otaInfoPayload({int firmwareVersion = 0x0103}) =>
     Uint8List.fromList([
       firmwareVersion & 0xFF,
       (firmwareVersion >> 8) & 0xFF,
@@ -438,7 +435,7 @@ RingOtaPackage _testPackage() {
   bytes.setRange(0, 4, 'ROTA'.codeUnits);
   bytes[4] = 1;
   bytes[6] = 1;
-  _writeUint32(bytes, 8, 0x00010203);
+  _writeUint32(bytes, 8, 0x0103);
   _writeUint32(bytes, 12, 4);
   bytes.setRange(16, 24, product);
   _writeUint32(bytes, 32, 0);
@@ -454,7 +451,7 @@ RingOtaPackage _testPackage() {
   final result = const RingOtaPackageParser().parse(
     bytes,
     deviceInfo: RingOtaInfo.fromPayload(
-      Uint8List.fromList([0x02, 0x02, 0x01, 0, ...product, 1, 1, 0, 0]),
+      Uint8List.fromList([0x02, 0x01, 0, 0, ...product, 1, 1, 0, 0]),
     ),
     versionPolicy: RingOtaVersionPolicy.normalUpgrade,
   );

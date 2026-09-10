@@ -210,7 +210,9 @@ class RingOtaInfo {
       );
     }
     if (payload[2] != 0 || payload[3] != 0) {
-      throw const FormatException('OTA firmware version reserved bytes must be zero');
+      throw const FormatException(
+        'OTA firmware version reserved bytes must be zero',
+      );
     }
     final productBytes = Uint8List.fromList(payload.sublist(4, 12));
     final firstPadding = productBytes.indexOf(0);

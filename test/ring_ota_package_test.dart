@@ -14,13 +14,13 @@ void main() {
       expect(bytes, hasLength(72));
       expect(
         _otaCrc16(bytes.take(28).followedBy(bytes.sublist(32, 64))),
-        0x3852,
+        0x33D9,
       );
       expect(result.isOk, isTrue);
-      expect(package?.firmwareVersion, 0x00010203);
+      expect(package?.firmwareVersion, 0x0103);
       expect(package?.totalSize, 8);
       expect(package?.product, 'Ring2');
-      expect(package?.headerChecksum, 0x3852);
+      expect(package?.headerChecksum, 0x33D9);
       expect(package?.partitions.map((item) => item.index), [0, 1]);
       expect(package?.partitions.map((item) => item.flashAddress), [
         0,
@@ -62,12 +62,13 @@ void main() {
   });
 
   group('RingOtaRecoveryMetadata and recovery parser', () {
-    test('round trips v1 JSON without exposing mutable byte containers', () {
+    test('round trips v2 JSON without exposing mutable byte containers', () {
       final package = _parse(_package()).valueOrNull!;
       final metadata = package.recoveryMetadata;
       final json = metadata.toJson();
       final decoded = RingOtaRecoveryMetadata.decode(json).valueOrNull!;
 
+      expect(json['schemaVersion'], 2);
       expect(decoded.versionPolicy, RingOtaVersionPolicy.normalUpgrade);
       expect(decoded.firmwareVersion, package.firmwareVersion);
       expect(decoded.productBytes, package.productBytes);
@@ -90,11 +91,15 @@ void main() {
 
     test('rejects unversioned, malformed and unsafe recovery metadata', () {
       final json = _parse(_package()).valueOrNull!.recoveryMetadata.toJson();
+      final legacySchema = Map<String, Object?>.from(json)
+        ..['schemaVersion'] = 1;
       final unknownSchema = Map<String, Object?>.from(json)
-        ..['schemaVersion'] = 2;
+        ..['schemaVersion'] = 3;
       final missingField = Map<String, Object?>.from(json)..remove('totalSize');
       final unknownField = Map<String, Object?>.from(json)..['extra'] = true;
       final wrongType = Map<String, Object?>.from(json)..['totalSize'] = '8';
+      final oversizedVersion = Map<String, Object?>.from(json)
+        ..['firmwareVersion'] = 0x10000;
       final unknownPolicy = Map<String, Object?>.from(json)
         ..['versionPolicy'] = 'force_downgrade';
       final shortInfo = Map<String, Object?>.from(json)
@@ -105,6 +110,10 @@ void main() {
         ..['deviceOtaInfo'] = reservedInfo;
 
       expect(
+        RingOtaRecoveryMetadata.decode(legacySchema).failureOrNull?.code,
+        BleFailureCode.unsupported,
+      );
+      expect(
         RingOtaRecoveryMetadata.decode(unknownSchema).failureOrNull?.code,
         BleFailureCode.unsupported,
       );
@@ -112,6 +121,7 @@ void main() {
         missingField,
         unknownField,
         wrongType,
+        oversizedVersion,
         shortInfo,
         reservedFlags,
       ]) {
@@ -138,7 +148,7 @@ void main() {
           isTrue,
         );
 
-        final targetReplacement = _package(firmwareVersion: 0x00010204);
+        final targetReplacement = _package(firmwareVersion: 0x0104);
         final largerReplacement = _package(
           partitions: const [
             _PartitionSpec(
@@ -230,14 +240,14 @@ void main() {
       'keeps the recovery version gate by default and permits an authorized downgrade',
       () {
         const parser = RingOtaPackageParser();
-        final downgrade = _package(firmwareVersion: 0x00010201);
+        final downgrade = _package(firmwareVersion: 0x0101);
         final initialMetadata = _parse(
           downgrade,
-          deviceInfo: _deviceInfo(firmwareVersion: 0x00010200),
+          deviceInfo: _deviceInfo(firmwareVersion: 0x0100),
         ).valueOrNull!.recoveryMetadata;
         final metadata = _metadataWith(initialMetadata, (json) {
           final payload = List<int>.from(json['deviceOtaInfo']! as List);
-          payload.setRange(0, 4, const [0x02, 0x02, 0x01, 0x00]);
+          payload.setRange(0, 4, const [0x02, 0x01, 0x00, 0x00]);
           json['deviceOtaInfo'] = payload;
         });
 
@@ -271,6 +281,22 @@ void main() {
               ?.code,
           BleFailureCode.crcMismatch,
         );
+
+        final wrongProduct = _package(
+          firmwareVersion: 0x0101,
+          product: const [0x52, 0x69, 0x6E, 0x67, 0x33, 0, 0, 0],
+        );
+        expect(
+          parser
+              .parseForRecovery(
+                wrongProduct,
+                metadata: metadata,
+                forceFirmware: true,
+              )
+              .failureOrNull
+              ?.code,
+          BleFailureCode.protocolError,
+        );
       },
     );
   });
@@ -294,6 +320,12 @@ void main() {
 
       final reserved = _package()..[24] = 1;
       _expectRejected(reserved);
+
+      for (final offset in [10, 11]) {
+        final reservedVersion = _package()..[offset] = 1;
+        _refreshHeaderChecksum(reservedVersion);
+        _expectRejected(reservedVersion);
+      }
     });
 
     test(
@@ -346,7 +378,7 @@ void main() {
         final sramEdge = _package(
           partitions: const [
             _PartitionSpec(
-              flashAddress: 0xEFFC,
+              flashAddress: 0xDFFC,
               runAddress: 0x1FFFF3FC,
               data: [1, 2, 3, 4],
             ),
@@ -368,7 +400,7 @@ void main() {
           _package(
             partitions: const [
               _PartitionSpec(
-                flashAddress: 0xF000,
+                flashAddress: 0xE000,
                 runAddress: 0x1FFF0000,
                 data: [1, 2, 3, 4],
               ),
@@ -480,22 +512,16 @@ void main() {
     test(
       'enforces normal upgrades, same-version recovery and lower-version rejection',
       () {
-        final current = _deviceInfo(firmwareVersion: 0x00010202);
+        final current = _deviceInfo(firmwareVersion: 0x0102);
 
         expect(
-          _parse(
-            _package(firmwareVersion: 0x00010203),
-            deviceInfo: current,
-          ).isOk,
+          _parse(_package(firmwareVersion: 0x0103), deviceInfo: current).isOk,
           isTrue,
         );
-        _expectRejected(
-          _package(firmwareVersion: 0x00010202),
-          deviceInfo: current,
-        );
+        _expectRejected(_package(firmwareVersion: 0x0102), deviceInfo: current);
         expect(
           _parse(
-            _package(firmwareVersion: 0x00010202),
+            _package(firmwareVersion: 0x0102),
             deviceInfo: current,
             policy: RingOtaVersionPolicy.sameVersionRecovery,
           ).isOk,
@@ -503,13 +529,51 @@ void main() {
         );
         for (final policy in RingOtaVersionPolicy.values) {
           _expectRejected(
-            _package(firmwareVersion: 0x00010201),
+            _package(firmwareVersion: 0x0101),
             deviceInfo: current,
             policy: policy,
           );
         }
       },
     );
+
+    test('orders ver16 across 0.255 to 1.0', () {
+      expect(
+        _parse(
+          _package(firmwareVersion: 0x0100),
+          deviceInfo: _deviceInfo(firmwareVersion: 0x00FF),
+        ).isOk,
+        isTrue,
+      );
+    });
+
+    test('force skips only version comparison', () {
+      final current = _deviceInfo(firmwareVersion: 0x0102);
+      expect(
+        _parse(
+          _package(firmwareVersion: 0x0101),
+          deviceInfo: current,
+          forceFirmware: true,
+        ).isOk,
+        isTrue,
+      );
+
+      _expectRejected(
+        _package(
+          firmwareVersion: 0x0101,
+          product: const [0x52, 0x69, 0x6E, 0x67, 0x33, 0, 0, 0],
+        ),
+        deviceInfo: current,
+        forceFirmware: true,
+      );
+      final corrupted = _package(firmwareVersion: 0x0101)..[64] ^= 1;
+      _expectRejected(
+        corrupted,
+        deviceInfo: current,
+        forceFirmware: true,
+        code: BleFailureCode.crcMismatch,
+      );
+    });
 
     test(
       'rejects absent or encryption-required bootloaders before parsing',
@@ -537,7 +601,7 @@ void main() {
           deviceInfo: _deviceInfo(bootFlags: 0x05),
         );
         _expectRejected(
-          _package(firmwareVersion: 0x00010201),
+          _package(firmwareVersion: 0x0101),
           deviceInfo: _deviceInfo(bootFlags: 0x09),
         );
       },
@@ -557,8 +621,8 @@ const _goldenPackageBytes = [
   0x02,
   0x00,
   0x03,
-  0x02,
   0x01,
+  0x00,
   0x00,
   0x08,
   0x00,
@@ -576,8 +640,8 @@ const _goldenPackageBytes = [
   0x00,
   0x00,
   0x00,
-  0x52,
-  0x38,
+  0xD9,
+  0x33,
   0x00,
   0x00,
   0x00,
@@ -626,11 +690,13 @@ Result<RingOtaPackage, BleFailure> _parse(
   Uint8List bytes, {
   RingOtaInfo? deviceInfo,
   RingOtaVersionPolicy policy = RingOtaVersionPolicy.normalUpgrade,
+  bool forceFirmware = false,
 }) {
   return const RingOtaPackageParser().parse(
     bytes,
     deviceInfo: deviceInfo ?? _deviceInfo(),
     versionPolicy: policy,
+    forceFirmware: forceFirmware,
   );
 }
 
@@ -638,17 +704,20 @@ void _expectRejected(
   Uint8List bytes, {
   RingOtaInfo? deviceInfo,
   RingOtaVersionPolicy policy = RingOtaVersionPolicy.normalUpgrade,
+  bool forceFirmware = false,
   BleFailureCode code = BleFailureCode.protocolError,
 }) {
-  final result = _parse(bytes, deviceInfo: deviceInfo, policy: policy);
+  final result = _parse(
+    bytes,
+    deviceInfo: deviceInfo,
+    policy: policy,
+    forceFirmware: forceFirmware,
+  );
   expect(result.isErr, isTrue);
   expect(result.failureOrNull?.code, code);
 }
 
-RingOtaInfo _deviceInfo({
-  int firmwareVersion = 0x00010202,
-  int bootFlags = 0x01,
-}) {
+RingOtaInfo _deviceInfo({int firmwareVersion = 0x0102, int bootFlags = 0x01}) {
   return RingOtaInfo.fromPayload(
     Uint8List.fromList([
       firmwareVersion & 0xFF,
@@ -676,7 +745,7 @@ RingOtaRecoveryMetadata _metadataWith(
 }
 
 Uint8List _package({
-  int firmwareVersion = 0x00010203,
+  int firmwareVersion = 0x0103,
   List<int> product = _ringProduct,
   List<_PartitionSpec> partitions = const [
     _PartitionSpec(flashAddress: 0, runAddress: 0x1FFF0000, data: [1, 2, 3, 4]),

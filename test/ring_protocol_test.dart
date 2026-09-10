@@ -201,7 +201,7 @@ void main() {
     test('parses exact OTA info fields and accepts all defined flags', () {
       final info = RingOtaInfo.fromPayload(_otaInfoPayload());
 
-      expect(info.firmwareVersion, 0x12345678);
+      expect(info.firmwareVersion, 0x5678);
       expect(info.product, 'RING');
       expect(info.productBytes, [0x52, 0x49, 0x4E, 0x47, 0, 0, 0, 0]);
       expect(info.bootFlags, 0x0F);
@@ -228,7 +228,7 @@ void main() {
 
       source[0] = 0;
       encoded[4] = 0;
-      expect(info.firmwareVersion, 0x12345678);
+      expect(info.firmwareVersion, 0x5678);
       expect(info.product, 'RING');
       expect(info.toPayload(), _otaInfoPayload());
     });
@@ -242,6 +242,13 @@ void main() {
         () => RingOtaInfo.fromPayload(Uint8List(17)),
         throwsFormatException,
       );
+    });
+
+    test('rejects nonzero OTA firmware version reserved bytes', () {
+      for (final offset in [2, 3]) {
+        final payload = _otaInfoPayload()..[offset] = 1;
+        expect(() => RingOtaInfo.fromPayload(payload), throwsFormatException);
+      }
     });
 
     test('validates OTA product padding, full text and printable ASCII', () {
@@ -541,7 +548,7 @@ void main() {
       transport.emit(RingCommand.otaInfo, _otaInfoPayload());
 
       final result = await future;
-      expect(result.valueOrNull?.firmwareVersion, 0x12345678);
+      expect(result.valueOrNull?.firmwareVersion, 0x5678);
       expect(result.valueOrNull?.product, 'RING');
       expect(result.valueOrNull?.bootVersion, '1.2.3');
     });
@@ -560,7 +567,7 @@ void main() {
 
         final result = await future;
         expect(result.isOk, isTrue);
-        expect(result.valueOrNull?.firmwareVersion, 0x123456FF);
+        expect(result.valueOrNull?.firmwareVersion, 0x56FF);
       },
     );
 
@@ -1042,8 +1049,8 @@ Uint8List _otaInfoPayload({
   return Uint8List.fromList([
     0x78,
     0x56,
-    0x34,
-    0x12,
+    0x00,
+    0x00,
     ...product,
     bootFlags,
     1,

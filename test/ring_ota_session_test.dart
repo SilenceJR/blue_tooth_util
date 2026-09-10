@@ -1196,7 +1196,7 @@ RingOtaPackage _package(List<_PartitionSpec> partitions) {
   bytes.setRange(0, 4, 'ROTA'.codeUnits);
   bytes[4] = 1;
   bytes[6] = partitions.length;
-  _writeUint32(bytes, 8, 0x00010203);
+  _writeUint32(bytes, 8, 0x0103);
   _writeUint32(bytes, 12, totalSize);
   bytes.setRange(16, 24, product);
   var dataOffset = tableEnd;
@@ -1218,7 +1218,7 @@ RingOtaPackage _package(List<_PartitionSpec> partitions) {
   final result = const RingOtaPackageParser().parse(
     bytes,
     deviceInfo: RingOtaInfo.fromPayload(
-      Uint8List.fromList([0x02, 0x02, 0x01, 0, ...product, 0x01, 1, 0, 0]),
+      Uint8List.fromList([0x02, 0x01, 0, 0, ...product, 0x01, 1, 0, 0]),
     ),
     versionPolicy: RingOtaVersionPolicy.normalUpgrade,
   );

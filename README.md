@@ -77,7 +77,7 @@ P0 跨进程恢复契约已实现：`RingOtaInfo.toPayload()` 精确返回首次
 `RingOtaRecoveryMetadata.decode()` 和
 `RingOtaPackageParser.parseForRecovery()`；该方法重建 `RingOtaInfo`，复用完整
 `.rota` 解析路径并重新执行能力、产品、版本、长度、地址和 CRC 门禁，再对比所有摘要字段。
-它不接受跳过校验的参数，也不保存分区数据或断点。已有的
+`forceFirmware` 仅允许经调用方授权跳过版本大小，不跳过其他校验，也不保存分区数据或断点。已有的
 `RingOtaUpdateSession.update(package)` 可以在没有业务 Session、没有发送 `0x0401` 的情况下，
 直接扫描 OTA 身份、从 START_OTA 完整重传，并在 `OTA_COMPLETE` 后通过业务 `0x0402` 确认版本。
 
@@ -85,9 +85,8 @@ P0 跨进程恢复契约已实现：`RingOtaInfo.toPayload()` 精确返回首次
 签名、有效期和更新授权。发送 `0x0401` 前，升级意图、规范化应用模式 MAC、原始固件文件
 引用和恢复元数据必须原子落盘；不得持久化分区断点、ACK 字节、平台 `deviceId` 或“已经验证”标记。
 
-协议文档 v1.6 已将 OTA 版本改为两段 `ver16`（`major << 8 | minor`），并要求
-`0x0402` 与 `.rota` 原 4 B 版本槽的高 2 B 为零。当前公开类型、版本策略、恢复摘要和测试
-仍采用旧三段版本语义；在迁移完成前，本包不能视为 v1.6 兼容。
+协议 v1.7 的 ver16 已落实到公开模型、解析器和恢复摘要 schema 2；
+`0x0402` 与 `.rota` 原 4 B 版本槽高 2 B 必须为零。自动化覆盖不代表真机兼容验收。
 
 BLE、MTU、无响应写和 OTA 恢复必须在 Android 与 iPhone 真机验证；模拟器构建只证明编译和原生依赖集成通过。
 
@@ -96,3 +95,23 @@ BLE、MTU、无响应写和 OTA 恢复必须在 Android 与 iPhone 真机验证�
 在 B5 commit `14ab90e` 上重新验证：根包 72 项测试通过；Example widget test 通过；Android debug APK、iOS Simulator debug 和 iPhoneOS debug no-codesign 构建通过。Pixel 8 Pro（Android 17）已安装并以前台 Activity 启动 Example。iOS 15.8.5 iPhone 可被 Flutter 发现，但本机没有对应 Apple Developer 账户和 Provisioning Profile，签名安装失败。
 
 上述证据不包含目标戒指、受控 `.rota`、真实 Manufacturer Data、MTU、无响应写、断连恢复或最终 `0x0402` 验证。Example 当前也没有 OTA 操作入口；因此 B6 只完成构建集成和 Android 容器启动，Android/iPhone 完整 OTA 真机联合验收仍是 App/固件联调门禁。
+
+
+## OTA v1.7 接入（2026-09-10）
+
+`0x0402` 与 `.rota` 使用 ver16（低 2 B 小端，高 2 B 保留为 0），与 `0x0101` 一致；
+0.17 的版本字节为 `11 00`。版本依据协议响应和包头，不依据文件名。
+恢复摘要使用 schema 2，拒绝 schema 1；`parse` / `parseForRecovery` 的 `forceFirmware`
+只用于经调用方明确授权的调试重刷/降级，不跳过产品、CRC、Bootloader、加密或地址验证。
+应用 bank 按 v1.7 §9.5.3 限制为 56 KB，详见 OTA 对接文档的仓库实现补充。
+App 在取得 OTA lease 后保存屏幕方向及完整分钟提醒配置，刷写确认后重连、恢复并回读；
+配置失败保留快照，支持单独重试。自定义任务不重放计数，保留本地记录并提示重新开始。
+本轮真实固件不入库；Android/iPhone OTA 与配置恢复由用户手动验收，自动化不代替真机结论。
+
+2026-09-10 独立复核：包级 `flutter test` 117 项通过；真实 V0.17 外部文件由生产
+parser 校验通过（93,168 B、8 分区、ver16=17、头 CRC 0x4F1D）。仅证明协议与
+文件校验，不代表刷写成功。包分析保留 6 项 Example/依赖声明/既有注释基线。
+
+配置恢复补充：降级目标明确返回 UNKNOWN_COMMAND 时跳过对应能力并提示未恢复，
+继续恢复支持项；超时/异常仍保留意图重试。自定义赞念入口可跨进程读取最近一次
+OTA 中断计数，确认后标记已读，保留记录本体，不发送计数重放命令。
