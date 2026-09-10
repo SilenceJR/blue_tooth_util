@@ -52,6 +52,7 @@ class RingBleSession implements BleSession {
   bool _screenFlipBusy = false;
   bool _findRingBusy = false;
   bool _otaEntryBusy = false;
+  Future<void> _reminderTail = Future<void>.value();
   Future<void> _customZikrTail = Future<void>.value();
   Completer<Result<RingOtaEntryState, BleFailure>>? _otaEntryOutcome;
   Completer<Result<RingScreenDirection, BleFailure>>? _screenFlipDone;
@@ -129,7 +130,7 @@ class RingBleSession implements BleSession {
   Stream<RingScreenDirection> get screenDirectionStream =>
       _screenDirection.stream;
 
-  /// 查询到的诵经提醒表流。
+  /// 历史固定提醒表流，不产生 `0x0112` 数据；每日提醒通过查询接口读取。
   Stream<List<RingPrayerReminder>> get prayerRemindersStream =>
       _prayerReminders.stream;
 
@@ -548,31 +549,77 @@ class RingBleSession implements BleSession {
     return _expectStatus(result, 1);
   }
 
-  /// 查询设备保存的诵经提醒表。
-  ///
-  /// 最多返回 8 条提醒；当前固件仅支持读写和持久化，尚未触发到点提醒。
-  // Future<Result<List<RingPrayerReminder>>> queryPrayerReminders() async {
-  //   final result = await _sendAndWait(RingCommand.prayerReminderQuery);
-  //   return _mapPayload(result, RingPrayerReminder.listFromPayload);
-  // }
+  /// 查询设备保存的每日诵经提醒；响应必须为七字节配置。
+  Future<Result<RingPrayerReminder, BleFailure>> queryPrayerReminder() =>
+      _serializeReminder(() async {
+        final result = await _sendAndWait(
+          RingCommand.prayerReminder,
+          // 查询排除迟到的成功 ACK；设备错误仍由公共错误帧处理。
+          predicate: (frame) =>
+              !(frame.payload.length == 1 && frame.payload[0] == 1),
+        );
+        return _mapPayload(result, RingPrayerReminder.fromPayload);
+      });
 
-  /// 覆盖设置设备诵经提醒表。
-  ///
-  /// [reminders] 最多 8 条；每条包含开关、小时、分钟和星期重复位图。
-  // Future<Result<void,BleFailure>> setPrayerReminders(
-  //   List<RingPrayerReminder> reminders,
-  // ) async {
-  //   final payload = RingPrayerReminder.listToPayload(reminders);
-  //   if (payload case Failure<Uint8List>(:final failure)) {
-  //     return Result.failure(failure);
-  //   }
-  //   final result = await _sendAndWait(
-  //     RingCommand.prayerReminderSet,
-  //     payload: (payload as Success<Uint8List>).value,
-  //     predicate: _payloadIs(1),
-  //   );
-  //   return _expectStatus(result, 1);
-  // }
+  /// 开启并设置完整配置；关闭请使用 [disablePrayerReminder]。
+  Future<Result<void, BleFailure>> setPrayerReminder(
+    RingPrayerReminder reminder,
+  ) {
+    final validation = reminder.validate();
+    if (validation.isErr) return Future.value(validation);
+    return _serializeReminder(
+      () async => _expectExactStatus(
+        await _sendAndWait(
+          RingCommand.prayerReminder,
+          payload: reminder.copyWith(enabled: true).toPayload(),
+          predicate: (frame) => frame.payload.length != 7,
+        ),
+        1,
+      ),
+    );
+  }
+
+  /// 关闭提醒，只发送一个字节，设备保留上次的时段和间隔。
+  Future<Result<void, BleFailure>> disablePrayerReminder() =>
+      _serializeReminder(
+        () async => _expectExactStatus(
+          await _sendAndWait(
+            RingCommand.prayerReminder,
+            payload: Uint8List.fromList([0]),
+            predicate: (frame) => frame.payload.length != 7,
+          ),
+          1,
+        ),
+      );
+
+  /// 同命令无事务编号，串行处理；写入超时后调用方须查询对账。
+  Future<Result<T, BleFailure>> _serializeReminder<T>(
+    Future<Result<T, BleFailure>> Function() operation,
+  ) {
+    final result = _reminderTail.then((_) async {
+      if (_logs.isClosed) {
+        return Result<T, BleFailure>.err(
+          const BleFailure(
+            code: BleFailureCode.connectionFailed,
+            message: 'Ring session disposed',
+          ),
+        );
+      }
+      try {
+        return await operation();
+      } on Object catch (error) {
+        return Result<T, BleFailure>.err(
+          BleFailure(
+            code: BleFailureCode.protocolError,
+            message: 'Recitation reminder operation failed',
+            cause: error,
+          ),
+        );
+      }
+    });
+    _reminderTail = result.then((_) {});
+    return result;
+  }
 
   @override
   /// 主动断开当前设备。
@@ -915,7 +962,8 @@ class RingBleSession implements BleSession {
               _findRingDone = null;
             }
           }
-        case RingCommand.ping ||
+        case RingCommand.prayerReminder ||
+            RingCommand.ping ||
             RingCommand.sportRealtimeSwitch ||
             RingCommand.softDisconnect ||
             RingCommand.setTime ||

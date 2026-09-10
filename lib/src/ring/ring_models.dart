@@ -850,146 +850,122 @@ class RingCustomZikrEvent {
   Map<String, dynamic> toJson() => {...toState().toJson(), 'event': event};
 }
 
-/// 诵经提醒配置项。
+/// 每天重复的诵经提醒配置，对应 `0x0112` 的七字节查询响应。
 class RingPrayerReminder {
-  /// 创建一条诵经提醒。
-  ///
-  /// [enabled] 表示该提醒是否启用；[hour] 为 0~23；
-  /// [minute] 为 0~59；[weekdaysMask] 为星期重复位图，bit0=周日，
-  /// bit6=周六，`0x7F` 表示每天，`0x00` 表示单次/不重复。
+  /// 创建配置；时间使用本地时钟，间隔单位为分钟。
   const RingPrayerReminder({
     required this.enabled,
-    required this.start,
-    required this.end,
-    required this.interval,
+    required this.startHour,
+    required this.startMinute,
+    required this.endHour,
+    required this.endMinute,
+    required this.intervalMinutes,
   });
 
-  /// 是否启用该提醒。
+  /// 是否启用；关闭后设备保留时段和间隔。
   final bool enabled;
 
-  /// 小时，协议范围 0~22。
-  final int start;
+  /// 起始小时，0~22。
+  final int startHour;
 
-  /// 分钟，协议范围 1-23。
-  final int end;
+  /// 起始分钟，0~59。
+  final int startMinute;
 
-  /// 星期重复位图，bit0=周日，bit6=周六。
-  final int interval;
+  /// 结束小时，0~23；结束时刻最多为 23:00。
+  final int endHour;
 
-  /// 格式化时间，用于调试 UI 展示。
-  String get timeText =>
-      '${start.toString().padLeft(2, '0')}:00-${end.toString().padLeft(2, '0')}:00';
+  /// 结束分钟，0~59。
+  final int endMinute;
 
+  /// 提醒间隔，只接受 60、120 或 180 分钟。
+  final int intervalMinutes;
+
+  /// 不跨午夜的时段长度，单位为分钟。
+  int get durationMinutes =>
+      endHour * 60 + endMinute - startHour * 60 - startMinute;
+
+  /// 复制配置并替换指定字段。
   RingPrayerReminder copyWith({
     bool? enabled,
-    int? start,
-    int? end,
-    int? interval,
+    int? startHour,
+    int? startMinute,
+    int? endHour,
+    int? endMinute,
+    int? intervalMinutes,
   }) => RingPrayerReminder(
     enabled: enabled ?? this.enabled,
-    start: start ?? this.start,
-    end: end ?? this.end,
-    interval: interval ?? this.interval,
+    startHour: startHour ?? this.startHour,
+    startMinute: startMinute ?? this.startMinute,
+    endHour: endHour ?? this.endHour,
+    endMinute: endMinute ?? this.endMinute,
+    intervalMinutes: intervalMinutes ?? this.intervalMinutes,
   );
 
-  /// 校验提醒字段是否符合协议范围。
+  /// 校验协议约束；间隔可以大于时段长度，此时只在起点提醒。
   Result<void, BleFailure> validate() {
-    // if (start < 0 || start > 22 || end < 0 || end > 24) {
-    //   return const Result.failure(
-    //     BleFailure(
-    //       code: BleFailureCode.protocolError,
-    //       message: 'Prayer reminder time is out of range',
-    //     ),
-    //   );
-    // }
-    // if (weekdaysMask < 0 || weekdaysMask > 0x7F) {
-    //   return const Result.failure(
-    //     BleFailure(
-    //       code: BleFailureCode.protocolError,
-    //       message: 'Prayer reminder weekdays mask is out of range',
-    //     ),
-    //   );
-    // }
+    if (startHour < 0 ||
+        startHour > 22 ||
+        endHour < 0 ||
+        endHour > 23 ||
+        startMinute < 0 ||
+        startMinute > 59 ||
+        endMinute < 0 ||
+        endMinute > 59 ||
+        endHour * 60 + endMinute > 23 * 60 ||
+        durationMinutes <= 0 ||
+        !const [60, 120, 180].contains(intervalMinutes)) {
+      return const Result.err(
+        BleFailure(
+          code: BleFailureCode.protocolError,
+          message: 'Invalid recitation reminder time range or interval',
+        ),
+      );
+    }
     return const Result.ok(null);
   }
 
-  /// 编码为协议中的 4 字节提醒项。
-  // List<int> toPayloadItem() {
-  //   return [enabled ? 1 : 0, hour, minute, weekdaysMask];
-  // }
-
-  /// 从协议 4 字节提醒项解析。
-  ///
-  /// [payload] 是完整提醒表 payload；[offset] 为当前提醒项起始偏移。
-  // factory RingPrayerReminder.fromPayloadItem(Uint8List payload, int offset) {
-  //   if (offset + 4 > payload.length) {
-  //     throw const FormatException('Prayer reminder item is incomplete');
-  //   }
-  //   if (payload[offset] != 0 && payload[offset] != 1) {
-  //     throw const FormatException('Prayer reminder enabled must be 0 or 1');
-  //   }
-  //   final item = RingPrayerReminder(
-  //     enabled: payload[offset] == 1,
-  //     hour: payload[offset + 1],
-  //     minute: payload[offset + 2],
-  //     weekdaysMask: payload[offset + 3],
-  //   );
-  //   final validation = item.validate();
-  //   if (validation case Failure<void>(:final failure)) {
-  //     throw FormatException(failure.message);
-  //   }
-  //   return item;
-  // }
-  //
-  // /// 从完整提醒表 payload 解析提醒列表。
-  // ///
-  // /// 第 0 字节为条数，后续每条 4 字节，最多 8 条。
-  // static List<RingPrayerReminder> listFromPayload(Uint8List payload) {
-  //   if (payload.isEmpty) {
-  //     throw const FormatException('Prayer reminder payload is empty');
-  //   }
-  //   final count = payload[0];
-  //   if (count > 8) {
-  //     throw const FormatException('Prayer reminder count must be <= 8');
-  //   }
-  //   if (payload.length != 1 + count * 4) {
-  //     throw const FormatException('Prayer reminder payload length mismatch');
-  //   }
-  //   return List.generate(
-  //     count,
-  //     (index) => RingPrayerReminder.fromPayloadItem(payload, 1 + index * 4),
-  //   );
-  // }
-  //
-  // /// 将提醒列表编码为完整提醒表 payload。
-  // static Result<Uint8List> listToPayload(List<RingPrayerReminder> reminders) {
-  //   if (reminders.length > 8) {
-  //     return const Result.failure(
-  //       BleFailure(
-  //         code: BleFailureCode.protocolError,
-  //         message: 'Prayer reminder count must be <= 8',
-  //       ),
-  //     );
-  //   }
-  //   final bytes = <int>[reminders.length];
-  //   for (final reminder in reminders) {
-  //     final validation = reminder.validate();
-  //     if (validation case Failure<void>(:final failure)) {
-  //       return Result.failure(failure);
-  //     }
-  //     bytes.addAll(reminder.toPayloadItem());
-  //   }
-  //   return Result.success(Uint8List.fromList(bytes));
-  // }
-
-  Map<String, dynamic> toJson() {
-    return {
-      'enabled': enabled,
-      'start': start,
-      'end': end,
-      'interval': interval,
-    };
+  /// 编码完整配置；关闭命令由 Session 单独编码为 `[00]`。
+  Uint8List toPayload() {
+    final validation = validate();
+    if (validation case Err(:final error)) throw FormatException(error.message);
+    return Uint8List.fromList([
+      enabled ? 1 : 0,
+      startHour,
+      startMinute,
+      endHour,
+      endMinute,
+      intervalMinutes & 0xff,
+      intervalMinutes >> 8,
+    ]);
   }
+
+  /// 严格解析完整查询响应，包括关闭时保留的时段。
+  factory RingPrayerReminder.fromPayload(Uint8List payload) {
+    if (payload.length != 7 || payload[0] > 1) {
+      throw const FormatException('Invalid recitation reminder payload');
+    }
+    final value = RingPrayerReminder(
+      enabled: payload[0] == 1,
+      startHour: payload[1],
+      startMinute: payload[2],
+      endHour: payload[3],
+      endMinute: payload[4],
+      intervalMinutes: payload[5] | payload[6] << 8,
+    );
+    final validation = value.validate();
+    if (validation case Err(:final error)) throw FormatException(error.message);
+    return value;
+  }
+
+  /// 输出具备明确单位的调试字段。
+  Map<String, dynamic> toJson() => {
+    'enabled': enabled,
+    'startHour': startHour,
+    'startMinute': startMinute,
+    'endHour': endHour,
+    'endMinute': endMinute,
+    'intervalMinutes': intervalMinutes,
+  };
 }
 
 /// 一天的赞念小时桶统计。

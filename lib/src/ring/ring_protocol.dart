@@ -31,14 +31,17 @@ enum RingCommand {
   /// 查询或接收当前屏幕方向。
   screenDirection(0x010E, '查询或接收当前屏幕方向'),
 
-  /// 设置诵经提醒表。
+  /// 已废弃的固定时刻提醒表：可读写但不触发，业务使用 prayerReminder。
   prayerReminderSet(0x010F, '设置诵经提醒表'),
 
-  /// 查询诵经提醒表。
+  /// 已废弃的固定时刻提醒表查询，业务使用 prayerReminder。
   prayerReminderQuery(0x0110, '查询诵经提醒表'),
 
   /// 设置、退出或查询自定义赞念模式。
   customZikrMode(0x0111, '自定义赞念模式'),
+
+  /// 查询、开启设置或关闭每日诵经提醒。
+  prayerReminder(0x0112, '诵经提醒'),
 
   /// 寻找戒指。
   findRing(0x010B, '寻找戒指'),
